@@ -1,92 +1,236 @@
 # Сервис `api`
 
-Единственный JSON-интерфейс для экранов. Читает PostgreSQL. Пишет только `settings` и `telephony_extensions`. В amoCRM не ходит. Файлы записей не хранит: для плеера подписывает временную ссылку на объект в `minio`.
+Единственный HTTP-интерфейс ядра. Принимает звонок по [контракту](../intake.md), хранит проекты и карточку оценки, отдаёт JSON экранам. В CRM не ходит. Токены CRM не хранит.
 
-Команда «обновить данные» не синхронизирует amoCRM внутри этого процесса. Сервис публикует сообщение в `crm.commands` и сразу возвращает ответ, что команда принята.
+Файл с формы кладёт в `minio` сам. Файл по URL не скачивает: публикует задание, его выполнит `media`. Для плеера подписывает временную ссылку на уже лежащий объект.
 
 ## Вход
 
-### Чтение списков и карточек
+Чтение и настройка приходят с экранов `web`. Приём звонка и обновление справочников приходят либо с этих экранов, либо от плагина с `Authorization: Bearer {source_token}`.
+
+Тело звонка, менеджеров, контакта и сделки разобрано в контракте приёма. Ниже — методы, которых в том контракте нет, и то, что сервис делает после успешного приёма.
+
+### Проекты
 
 ```http
-GET /api/calls?manager_id={uuid}&date_from=2026-10-01&date_to=2026-10-05&q=Альфа&deal_status_id={amo_status_id}&sort=objections_score&order=asc&page=1&per_page=50
+GET /api/projects
+POST /api/projects
 ```
+
+`POST` принимает `{ "name": "Отдел продаж" }`.
+
+### Настройки анализа
+
+```http
+GET /api/projects/{project_id}/settings
+PUT /api/projects/{project_id}/settings
+```
+
+Тело `PUT`:
+
+```json
+{
+  "timezone": "Europe/Moscow",
+  "language": "ru",
+  "min_call_duration_sec": 180,
+  "ask_next_step": true,
+  "stages": [
+    {
+      "key": "opening",
+      "title": "Открытие",
+      "weight": 0.15,
+      "instruction": "Начало разговора и установление контакта"
+    }
+  ]
+}
+```
+
+В `stages` не меньше одного элемента. `key` уникален, совпадает с шаблоном `[a-z0-9_]+` и после создания этапа не меняется через этот запрос: новый `key` добавляет этап, пропавший из списка — убирает его из будущих оценок. Сумма `weight` равна 1. `min_call_duration_sec` — целое больше нуля. Успешное сохранение увеличивает `scorecards.version`. Готовые `call_analysis` сервис не переписывает.
+
+### Источники
+
+```http
+GET /api/projects/{project_id}/sources
+POST /api/projects/{project_id}/sources
+POST /api/source-setup/exchange
+```
+
+`POST` источника:
+
+```json
+{
+  "provider": "amocrm",
+  "display_name": "amoCRM"
+}
+```
+
+`provider` выбирает, какой плагин откроет браузер. Ядро само плагин не вызывает.
+
+Обмен кода вызывает уже плагин:
+
+```json
+{ "setup_code": "одноразовый код" }
+```
+
+### Ручной менеджер
+
+```http
+PATCH /api/projects/{project_id}/managers/{manager_id}
+```
+
+```json
+{ "name": "Анна Петрова" }
+```
+
+### Чтение экранов
+
+```http
+GET /api/projects/{project_id}/calls?manager_id={uuid}&date_from=2026-10-01&date_to=2026-10-13&q=Альфа&deal_status=Переговоры&sort=stage.objections&order=asc&page=1&per_page=50
+GET /api/projects/{project_id}/calls/{id}
+GET /api/projects/{project_id}/calls/{id}/recording
+GET /api/projects/{project_id}/managers?date_from=2026-10-01&date_to=2026-10-13&sort=overall&order=desc
+GET /api/projects/{project_id}/managers/{manager_id}?date_from=2026-10-01&date_to=2026-10-13
+GET /api/projects/{project_id}/managers/{manager_id}/calls
+GET /api/projects/{project_id}/filters
+```
+
+Параметры списка звонков:
 
 | Параметр | Смысл |
 | --- | --- |
-| `manager_id` | наш id менеджера; пусто — все |
-| `date_from`, `date_to` | включительно, календарные даты в часовом поясе настроек, сравнение по `calls.started_at` |
-| `q` | подстрока в имени контакта, названии компании или телефоне |
-| `deal_status_id` | текущая стадия сделки |
-| `sort` | `started_at`, `manager_name`, `opening_score`, `needs_score`, `presentation_score`, `objections_score`, `closing_score`, `overall_score` |
+| `manager_id` | id менеджера в ядре; пусто — все |
+| `date_from`, `date_to` | календарные даты включительно в поясе проекта, сравнение по `started_at` |
+| `q` | подстрока в имени контакта, компании или телефоне |
+| `deal_status` | точное `current_deal_status_name` |
+| `sort` | `started_at`, `manager`, `overall` или `stage.{key}` текущего проекта |
 | `order` | `asc` или `desc` |
 | `page` | с 1 |
 | `per_page` | по умолчанию 50, максимум 100 |
 
-По умолчанию `sort=started_at` и `order=desc`. В выборку списка попадают только строки `processing_status=completed`.
+По умолчанию `sort=started_at` и `order=desc`. В списке только `processing_status=completed`.
 
-```http
-GET /api/calls/{id}
-GET /api/calls/{id}/recording
-GET /api/managers?date_from=2026-10-01&date_to=2026-10-05&sort=overall_score&order=desc
-GET /api/managers/{amo_user_id}?date_from=2026-10-01&date_to=2026-10-05
-GET /api/managers/{amo_user_id}/calls?...те же параметры, что у /api/calls, без manager_id
-GET /api/filters
-GET /api/settings
-GET /api/integration
-```
+`GET .../calls/{id}/recording` подписывает ссылку, если у звонка есть `recording_storage_key`.
 
-`GET /api/calls/{id}/recording` не принимает тело. Сервис проверяет, что у звонка есть `recording_storage_key`, и подписывает ссылку на чтение.
+## Выход
 
-### Запись настроек
+### После создания проекта
 
-```http
-PUT /api/settings
-Content-Type: application/json
-```
+`201`:
 
 ```json
 {
+  "id": "p1",
+  "name": "Отдел продаж",
+  "timezone": "Europe/Moscow",
+  "language": "ru",
   "min_call_duration_sec": 180,
-  "weights": {
-    "opening": 0.15,
-    "needs": 0.30,
-    "presentation": 0.20,
-    "objections": 0.20,
-    "closing": 0.15
-  }
+  "scorecard_version": 1
 }
 ```
 
-Остальные поля `settings` (интервалы опроса, параллельность, версия инструкции) в этом запросе не меняются. Сумма весов должна быть равна 1. Порог — целое число секунд больше нуля.
+Вместе с проектом появляются ручной источник и шаблон из пяти этапов.
 
-### Команда синхронизации
+`GET /api/projects` возвращает `{ "items": [ ...те же поля, без порога и версии ] }`.
 
-```http
-POST /api/sync
+### Настройки
+
+`GET` и успешный `PUT` возвращают сохранённое тело плюс `"scorecard_version": 4`.
+
+Ошибка проверки — `422`:
+
+```json
+{
+  "error": "invalid_settings",
+  "details": ["weights_sum_must_be_1"]
+}
 ```
 
-Тела нет. Сервис публикует в `crm.commands`:
+### Источник и код связки
+
+`GET .../sources`:
+
+```json
+{
+  "items": [
+    {
+      "id": "src-manual",
+      "kind": "manual",
+      "provider": null,
+      "display_name": "Ручная загрузка",
+      "last_intake_at": null
+    },
+    {
+      "id": "src-amo",
+      "kind": "plugin",
+      "provider": "amocrm",
+      "display_name": "amoCRM",
+      "last_intake_at": "2026-10-13T12:00:00+03:00"
+    }
+  ]
+}
+```
+
+`POST .../sources` отвечает `201`:
+
+```json
+{
+  "source_id": "src-amo",
+  "setup_code": "одноразовый код",
+  "expires_at": "2026-10-13T12:15:00+03:00"
+}
+```
+
+Код живёт 15 минут и принимается один раз.
+
+`POST /api/source-setup/exchange` отвечает `200`:
+
+```json
+{
+  "project_id": "p1",
+  "source_id": "src-amo",
+  "source_token": "секрет, который плагин сохраняет у себя"
+}
+```
+
+Повторный обмен того же кода — `401` `{ "error": "setup_code_used" }`. Просроченный код — `401` `{ "error": "setup_code_expired" }`.
+
+### После принятого звонка
+
+Ответ `POST` звонка и прикладывания записи описан в контракте приёма. Дополнительно сервис делает следующее.
+
+Пишет или находит менеджера, контакт и строку `calls`. Для плагина менеджер и контакт ищутся по `(project_id, source_id, external_id)`. Имя и ссылка из тела обновляют уже существующую строку справочника. Для формы менеджер берётся по `manager.id` либо создаётся ручным с переданным именем.
+
+Если в теле есть `recording.url`, в строку пишется `recording_source_url`, статус становится `audio_queued`, в Redis уходит:
 
 ```json
 {
   "message_id": "uuid",
-  "command": "sync_reference",
-  "enqueued_at": "2026-10-05T20:15:00+03:00"
+  "project_id": "p1",
+  "call_id": "58374",
+  "attempt": 1,
+  "enqueued_at": "2026-10-13T12:00:00+03:00",
+  "audio": {
+    "type": "url",
+    "url": "https://records.example/abc.mp3"
+  }
 }
 ```
 
-`sync_reference` означает: обновить пользователей, воронки и текущие статусы сделок у уже сохранённых звонков. Первичный импорт истории этой кнопкой не запускается. Его запускает `crm-sync` сам, один раз, сразу после успешного OAuth.
+Если пришёл файл, сервис сохраняет его как `projects/{project_id}/calls/{call_id}.{ext}` и публикует то же задание с `audio.type=object`, `bucket`, `key` и `content_type`.
 
-## Выход
+Если записи нет, статус `recording_pending`, в очередь ничего не ставится.
 
-### `GET /api/calls`
+`last_intake_at` источника обновляется на успешном приёме звонка и на успешном `PUT` менеджеров.
+
+Повтор того же `external_id` новую очередь не ставит, кроме случая `recording_pending`, когда запись пришла впервые.
+
+### `GET .../calls`
 
 ```json
 {
   "page": 1,
   "per_page": 50,
-  "total": 2,
+  "total": 1,
   "items": [
     {
       "id": "58374",
@@ -94,81 +238,77 @@ POST /api/sync
       "duration_sec": 1458,
       "direction": "out",
       "phone": "+79990000000",
-      "manager": {
-        "id": "b7e1",
-        "amo_user_id": 123,
-        "name": "Анна Петрова"
-      },
+      "source": { "kind": "plugin", "provider": "amocrm", "display_name": "amoCRM" },
+      "manager": { "id": "b7e1", "name": "Анна Петрова" },
+      "company_name": "ООО Альфа",
       "contact": {
         "name": "Алексей Смирнов",
-        "company_name": "ООО Альфа",
-        "amo_url": "https://example.amocrm.ru/contacts/detail/456"
+        "external_url": "https://example.amocrm.ru/contacts/detail/456"
       },
       "deal": {
-        "amo_lead_id": 789,
         "name": "Поставка",
         "link_status": "linked",
         "status_name": "Переговоры",
-        "amo_url": "https://example.amocrm.ru/leads/detail/789"
+        "external_url": "https://example.amocrm.ru/leads/detail/789"
       },
-      "scores": {
-        "opening": 85,
-        "needs": 90,
-        "presentation": 88,
-        "objections": 70,
-        "closing": 92,
-        "overall": 86
-      }
+      "stages": [
+        { "key": "opening", "score": 85 },
+        { "key": "needs", "score": 90 },
+        { "key": "objections", "score": 70 }
+      ],
+      "overall_score": 86
     }
   ]
 }
 ```
 
-Если контакт не определён, `contact` равен `null`. Если сделка не привязана, `deal.amo_lead_id` равен `null`, `deal.link_status` равен `unresolved` или `ambiguous`, `deal.status_name` — пустая строка. Для `ambiguous` клиент показывает подпись «Несколько активных сделок». Для `unresolved` — «Сделка не определена».
+`contact` равен `null`, если контакта нет. `company_name` при этом всё равно может быть заполнена: она хранится на самом звонке.
 
-В списке `status_name` — это **текущий** статус сделки.
+`status_name` в списке — текущая стадия. `stages` содержит только ключи, которые есть в снимке этого звонка. Колонка текущей карточки без такого ключа на экране пустая.
 
-### `GET /api/calls/{id}`
+Для `ambiguous` и `unresolved` в `deal` нет `external_url`, `name` пустое, заполнен `link_status`. Для `absent` объект `deal` равен `null`.
 
-Объект элемента списка плюс поля карточки:
+### `GET .../calls/{id}`
+
+Поля списка плюс статус, снимок комментариев и транскрипт. Метод отдаёт звонок в любом статусе. У незавершённого `stages`, `summary` и `transcript` равны `null`.
 
 ```json
 {
   "id": "58374",
+  "processing_status": "completed",
   "started_at": "2026-04-28T16:42:00+03:00",
   "duration_sec": 1458,
   "direction": "out",
   "phone": "+79990000000",
-  "processing_status": "completed",
-  "manager": { "id": "b7e1", "amo_user_id": 123, "name": "Анна Петрова" },
+  "source": { "kind": "manual", "provider": null, "display_name": "Ручная загрузка" },
+  "manager": { "id": "b7e1", "name": "Анна Петрова" },
+  "company_name": "ООО Альфа",
   "contact": {
     "name": "Алексей Смирнов",
-    "company_name": "ООО Альфа",
-    "amo_url": "https://example.amocrm.ru/contacts/detail/456"
+    "external_url": null
   },
   "deal": {
-    "amo_lead_id": 789,
     "name": "Поставка",
     "link_status": "linked",
     "status_at_call_name": "Переговоры",
     "status_name": "Счет выставлен",
-    "amo_url": "https://example.amocrm.ru/leads/detail/789"
+    "external_url": null
   },
-  "scores": {
-    "opening": 85,
-    "needs": 70,
-    "presentation": 68,
-    "objections": 55,
-    "closing": 60,
-    "overall": 67
+  "context": {
+    "notes": "Клиент сравнивает два предложения.",
+    "fields": [
+      { "key": "segment", "label": "Сегмент", "value": "enterprise" }
+    ]
   },
-  "comments": {
-    "opening": "Хорошо установил контакт",
-    "needs": "Выявил проблему, но не выяснил критерии выбора",
-    "presentation": "Презентация слишком общая",
-    "objections": "Слабо отработал возражение по стоимости",
-    "closing": "Не зафиксирован следующий шаг"
-  },
+  "stages": [
+    {
+      "key": "opening",
+      "title": "Открытие",
+      "score": 85,
+      "comment": "Хорошо установил контакт"
+    }
+  ],
+  "overall_score": 67,
   "summary": "Клиент заинтересован. Основная потребность выявлена.",
   "next_step_detected": false,
   "transcript": [
@@ -179,125 +319,69 @@ POST /api/sync
       "text": "Добрый день, Алексей..."
     }
   ],
-  "has_recording": true
+  "has_recording": true,
+  "scorecard_version": 3
 }
 ```
 
-На главном экране этот метод для незавершённых звонков не нужен. Прямой запрос по id возвращает звонок в любом статусе: тогда `scores`, `comments`, `summary` и `transcript` могут быть `null`, а `processing_status` объясняет, почему оценки ещё нет.
+Названия этапов здесь из снимка анализа, а не из текущих настроек. Неизвестный id или чужой проект — `404` `{ "error": "call_not_found" }`.
 
-Неизвестный id — ответ `404` с телом `{ "error": "call_not_found" }`.
+### Запись для плеера
 
-### `GET /api/calls/{id}/recording`
+`GET .../calls/{id}/recording` отвечает `302` на ссылку чтения объекта. Срок ссылки — 15 минут. Файла нет — `404` `{ "error": "recording_missing" }`.
 
-Ответ `302` на временную ссылку чтения объекта. Срок ссылки — 15 минут. Если файла нет — `404` `{ "error": "recording_missing" }`.
-
-### `GET /api/managers`
-
-Средние считаются по звонкам этого менеджера со статусом `completed` и `started_at` внутри периода. Звонок без `manager_id` в этот список не входит.
+### Менеджеры
 
 ```json
 {
   "date_from": "2026-10-01",
-  "date_to": "2026-10-05",
+  "date_to": "2026-10-13",
   "items": [
     {
-      "amo_user_id": 123,
+      "id": "b7e1",
       "name": "Анна Петрова",
       "is_active": true,
+      "source": { "kind": "plugin", "provider": "amocrm" },
       "calls_count": 120,
-      "scores": {
-        "opening": 88,
-        "needs": 91,
-        "presentation": 86,
-        "objections": 72,
-        "closing": 78,
-        "overall": 83
-      }
+      "stages": [
+        { "key": "opening", "title": "Открытие", "score": 88 },
+        { "key": "objections", "title": "Возражения", "score": 72 }
+      ],
+      "overall_score": 83
     }
   ]
 }
 ```
 
-Средние — целые, арифметическое округление. У менеджера без звонков за период `calls_count` равен 0, оценки равны `null`. Такие менеджеры в списке остаются, если `is_active=true`.
+В `stages` ровно этапы текущей карточки, по порядку. `score` этапа — среднее по звонкам периода со статусом `completed`, у которых в снимке есть этот ключ. Звонок без ключа в это среднее не входит и в `calls_count` входит. `overall_score` — среднее сохранённых итогов. Округление до целого. Нет ни одного итога — `overall_score` равен `null`, оценки этапов тоже `null`.
 
-`sort` для этого метода: `name`, `calls_count` и те же шесть ключей оценок. Пустые оценки при сортировке по оценке уходят в конец.
+Активные менеджеры без звонков за период остаются в списке. Неактивные попадают в список, только если за период у них есть завершённый звонок.
 
-### `GET /api/managers/{amo_user_id}`
+`sort`: `name`, `calls_count`, `overall`, `stage.{key}`. Пустая оценка при сортировке по этапу уходит в конец.
 
-Один объект из `items` плюс `email`. Неизвестный `amo_user_id` — `404` `{ "error": "manager_not_found" }`.
+`GET .../managers/{manager_id}` — один такой объект плюс `email`. Нет менеджера — `404` `{ "error": "manager_not_found" }`.
 
-### `GET /api/managers/{amo_user_id}/calls`
+`GET .../managers/{manager_id}/calls` — тот же список, что у звонков, уже ограниченный этим менеджером.
 
-Тот же объект, что `GET /api/calls`, уже отфильтрованный по менеджеру.
+`PATCH` имени отвечает обновлённым объектом. Менеджер плагина — `409` `{ "error": "manager_owned_by_plugin" }`.
 
-### `GET /api/filters`
+### Фильтры
 
 ```json
 {
   "managers": [
-    { "id": "b7e1", "amo_user_id": 123, "name": "Анна Петрова" }
+    { "id": "b7e1", "name": "Анна Петрова" }
   ],
-  "deal_statuses": [
-    { "amo_status_id": 142, "name": "Переговоры", "pipeline_name": "Продажи" }
+  "deal_statuses": ["Переговоры", "Счет выставлен"],
+  "stages": [
+    { "key": "opening", "title": "Открытие" },
+    { "key": "needs", "title": "Потребность" }
   ]
 }
 ```
 
-В `managers` только `is_active=true`. Стадии — все неуспешные и успешные статусы подключённого аккаунта, в порядке воронки.
+В `managers` только `is_active=true`. `deal_statuses` — различные непустые текущие стадии звонков проекта. `stages` — текущая карточка, по ней `web` строит колонки.
 
-### `GET /api/settings`
+### Общие отказы чтения
 
-Текущие редактируемые поля:
-
-```json
-{
-  "min_call_duration_sec": 180,
-  "weights": {
-    "opening": 0.15,
-    "needs": 0.30,
-    "presentation": 0.20,
-    "objections": 0.20,
-    "closing": 0.15
-  }
-}
-```
-
-### `PUT /api/settings`
-
-При успехе — то же тело, что у `GET /api/settings`, уже с новыми значениями. При ошибке проверки — `422`:
-
-```json
-{
-  "error": "invalid_settings",
-  "details": ["weights_sum_must_be_1"]
-}
-```
-
-### `GET /api/integration`
-
-```json
-{
-  "connected": true,
-  "amo_subdomain": "example",
-  "last_user_sync_at": "2026-10-05T18:00:00+03:00",
-  "last_poll_at": "2026-10-05T20:14:00+03:00",
-  "history_imported_at": "2026-10-01T10:00:00+03:00"
-}
-```
-
-Пока OAuth не пройден, `connected` равен `false`, остальные поля — `null`.
-
-### `POST /api/sync`
-
-```json
-{
-  "accepted": true,
-  "command": "sync_reference"
-}
-```
-
-Ответ `202`. Появление новых данных на экране зависит от того, когда `crm-sync` закончит команду. Этот метод их не ждёт.
-
-## Ошибки, общие для методов
-
-Неизвестный параметр `sort` или `order` — `400` `{ "error": "invalid_query" }`.
+Неизвестный `sort`, `order` или ключ этапа — `400` `{ "error": "invalid_query" }`. Чужой или неизвестный `project_id` — `404` `{ "error": "project_not_found" }`. Токен плагина от другого проекта — `403` `{ "error": "source_project_mismatch" }`.

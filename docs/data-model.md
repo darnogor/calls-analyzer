@@ -1,137 +1,146 @@
-# Модель данных
+# Модель данных ядра
 
-Одна база PostgreSQL. Имена ниже — логические. Физические типы и миграции появятся вместе с кодом.
+База PostgreSQL ядра. Имена ниже — логические. Физические типы и миграции появятся вместе с кодом.
 
-Идентификаторы наших строк — UUID. Идентификаторы amoCRM хранятся как числа в полях с префиксом `amo_`.
+Идентификаторы строк ядра — UUID. Идентификатор во внешней системе хранится строкой в `external_id` и имеет смысл только вместе с `source_id`. Полей amoCRM в этой схеме нет. Токены и сырые события CRM лежат в базе плагина, см. [plugins/amocrm.md](plugins/amocrm.md).
 
-## `accounts`
-
-Подключение к amoCRM. В текущем допущении строка одна.
+## `projects`
 
 | Поле | Смысл |
 | --- | --- |
-| `id` | наш id |
-| `amo_account_id` | id аккаунта amoCRM |
-| `amo_subdomain` | поддомен для ссылок |
-| `access_token` | текущий токен |
-| `refresh_token` | токен обновления |
-| `token_expires_at` | момент истечения access token |
-| `connected_at` | когда прошёл OAuth |
-| `last_user_sync_at` | последняя синхронизация пользователей |
-| `last_poll_at` | последний резервный опрос звонков |
-| `history_imported_at` | когда закончился первичный импорт |
+| `id` | id проекта |
+| `name` | название в списке проектов |
+| `timezone` | пояс для границы «сегодня», по умолчанию `Europe/Moscow` |
+| `language` | язык записи для распознавания, по умолчанию `ru` |
+| `min_call_duration_sec` | порог анализа, по умолчанию 180 |
+| `created_at` | создание |
+
+## `scorecards`
+
+Одна текущая карточка на проект. Каждое сохранение увеличивает `version`.
+
+| Поле | Смысл |
+| --- | --- |
+| `project_id` | проект |
+| `version` | целое, с 1 |
+| `ask_next_step` | просить ли модель отметить зафиксированный следующий шаг |
+| `stages_json` | упорядоченный список этапов |
+
+Элемент `stages_json`:
+
+```json
+{
+  "key": "opening",
+  "title": "Открытие",
+  "weight": 0.15,
+  "instruction": "Начало разговора и установление контакта"
+}
+```
+
+`key` уникален внутри карточки и не меняется при правке названия. Сумма `weight` равна 1. Шаблон нового проекта — пять этапов из [продукта](product.md).
+
+## `sources`
+
+Откуда в проект приходят звонки. У каждого проекта с момента создания есть один источник `kind=manual`.
+
+| Поле | Смысл |
+| --- | --- |
+| `id` | id источника |
+| `project_id` | проект |
+| `kind` | `manual` или `plugin` |
+| `provider` | для ручного пусто; для первого плагина `amocrm` |
+| `display_name` | подпись в настройках |
+| `token_hash` | хэш `source_token`; сам токен хранится только у плагина |
+| `last_intake_at` | последний успешный приём звонка или справочника |
+| `created_at` | создание |
 
 ## `managers`
 
 | Поле | Смысл |
 | --- | --- |
-| `id` | наш id |
-| `account_id` | аккаунт |
-| `amo_user_id` | уникальный id пользователя amoCRM |
-| `name` | имя из amoCRM |
-| `email` | почта из amoCRM |
-| `group_id` | группа amoCRM, если пришла |
-| `is_active` | активен ли пользователь |
-| `created_at`, `updated_at` | наши метки |
+| `id` | id в ядре |
+| `project_id` | проект |
+| `source_id` | источник, создавший строку |
+| `external_id` | id у источника; у ручного менеджера пусто |
+| `name` | имя для экрана |
+| `email` | почта, если передана |
+| `is_active` | показывать в фильтрах и в списке менеджеров |
+| `created_at`, `updated_at` | метки |
 
-Уникальность: `(account_id, amo_user_id)`.
+Уникальность плагинного менеджера: `(project_id, source_id, external_id)`.
 
-Имя меняется только при синхронизации из amoCRM.
+Имя плагинного менеджера меняет только повторный приём от того же источника. Имя ручного менеджера меняет пользователь проекта.
 
 ## `contacts`
 
-Локальная карточка для экрана и ссылки. Компания хранится на контакте: отдельной сущности «компания» в MVP нет.
-
 | Поле | Смысл |
 | --- | --- |
-| `id` | наш id |
-| `account_id` | аккаунт |
-| `amo_contact_id` | id контакта |
-| `name` | имя контакта |
-| `company_name` | название компании |
-| `amo_company_id` | id компании |
-| `updated_at` | последнее обновление из amoCRM |
+| `id` | id в ядре |
+| `project_id` | проект |
+| `source_id` | источник |
+| `external_id` | id у источника; у ручного контакта пусто |
+| `name` | имя |
+| `company_name` | компания |
+| `external_url` | готовая ссылка или пусто |
+| `updated_at` | последнее обновление |
 
-Уникальность: `(account_id, amo_contact_id)`.
+Уникальность плагинного контакта: `(project_id, source_id, external_id)`.
 
-Ссылка на контакт собирается при отдаче API:
-
-```text
-https://{amo_subdomain}.amocrm.ru/contacts/detail/{amo_contact_id}
-```
-
-Ссылка на сделку:
-
-```text
-https://{amo_subdomain}.amocrm.ru/leads/detail/{amo_lead_id}
-```
-
-В базу готовый URL не пишем: поддомен может смениться.
-
-## `pipelines` и `pipeline_statuses`
-
-Справочник человеческих названий стадий. Наши собственные стадии не заводим.
-
-`pipelines`: `id`, `account_id`, `amo_pipeline_id`, `name`.
-
-`pipeline_statuses`: `id`, `pipeline_id`, `amo_status_id`, `name`, `is_success`, `is_lost`, `sort`.
-
-Активная сделка — статус, у которого `is_success` и `is_lost` ложны.
+Ядро не собирает URL из поддомена и числового id.
 
 ## `calls`
 
 | Поле | Смысл |
 | --- | --- |
-| `id` | наш id |
-| `account_id` | аккаунт |
-| `amo_note_id` | id примечания |
-| `external_call_id` | `params.uniq`, а если его нет — `amo_note_id` |
-| `manager_id` | наш менеджер, может быть пустым |
-| `amo_user_id` | id пользователя amoCRM, найденный по правилам сервиса |
-| `contact_id` | наш контакт, может быть пустым |
-| `amo_lead_id` | сделка, если определилась |
-| `deal_link_status` | `linked`, `unresolved`, `ambiguous` |
-| `direction` | `in` или `out` |
-| `phone` | номер из примечания |
-| `started_at` | время звонка |
-| `duration_sec` | длительность |
-| `recording_source_url` | исходный `params.link` |
-| `recording_storage_key` | ключ объекта в `minio` |
-| `recording_content_type` | MIME файла |
-| `pipeline_id` | воронка на момент привязки |
-| `deal_name` | название сделки |
+| `id` | id в ядре |
+| `project_id` | проект |
+| `source_id` | источник |
+| `external_id` | id звонка у источника; у ручной загрузки без ключа ядро кладёт свой uuid |
+| `idempotency_key` | ключ повтора формы, если его прислали |
+| `manager_id` | менеджер, может быть пустым |
+| `contact_id` | контакт, может быть пустым |
+| `company_name` | компания на момент приёма |
+| `direction` | `in`, `out` или пусто |
+| `phone` | номер |
+| `started_at` | начало |
+| `duration_sec` | секунды; `media` дополняет, если при приёме было пусто |
+| `recording_source_url` | URL, который просили скачать |
+| `recording_storage_key` | ключ объекта |
+| `recording_content_type` | MIME |
+| `deal_external_id` | id сделки у источника |
+| `deal_name` | название |
 | `deal_price` | бюджет |
-| `deal_status_at_call_id` | id стадии в момент звонка |
-| `deal_status_at_call_name` | название стадии в момент звонка |
-| `current_deal_status_id` | текущий id стадии |
-| `current_deal_status_name` | текущее название стадии |
+| `deal_status_at_call_name` | стадия в момент звонка |
+| `current_deal_status_name` | текущая стадия |
+| `deal_external_url` | готовая ссылка |
+| `deal_link_status` | `linked`, `unresolved`, `ambiguous`, `absent` |
+| `context_json` | `notes` и `fields` |
 | `processing_status` | см. [architecture.md](architecture.md) |
-| `error` | JSON причины сбоя |
-| `created_at`, `updated_at` | наши метки |
+| `error` | JSON сбоя |
+| `created_at`, `updated_at` | метки |
 
-Уникальность: `(account_id, external_call_id)`.
+Уникальность: `(project_id, source_id, external_id)`.
 
-`started_at` берётся из отдельного времени звонка в примечании. Если телефония его не присылает, используем время создания примечания. Это один из пунктов технической проверки на реальном звонке.
+Отдельной таблицы сделок нет. Обновление текущей стадии ищет звонки по `(project_id, source_id, deal_external_id)`.
 
 ## `call_analysis`
 
-Одна строка на звонок.
+Одна строка на звонок. Этапы хранятся снимком, а не колонками `opening_score`: у проектов разные ключи.
 
 | Поле | Смысл |
 | --- | --- |
-| `id` | наш id |
+| `id` | id |
 | `call_id` | звонок, уникальный |
 | `transcript_json` | массив реплик |
-| `opening_score`, `needs_score`, `presentation_score`, `objections_score`, `closing_score` | целые 0–100 |
-| `overall_score` | итог по весам, целое 0–100 |
-| `opening_comment`, `needs_comment`, `presentation_comment`, `objections_comment`, `closing_comment` | текст этапа |
+| `scorecard_version` | версия карточки на момент оценки |
+| `stages_json` | оценки, комментарии, веса и названия на момент оценки |
+| `overall_score` | итог по весам снимка, целое 0–100 |
 | `summary` | краткий вывод |
-| `next_step_detected` | модель увидела зафиксированный следующий шаг |
+| `next_step_detected` | признак следующего шага или пусто, если карточка его не спрашивала |
 | `ai_model` | имя модели |
-| `prompt_version` | версия инструкции оценки |
 | `created_at` | время записи оценки |
 
-Элемент `transcript_json`:
+Элемент транскрипта:
 
 ```json
 {
@@ -142,64 +151,20 @@ https://{amo_subdomain}.amocrm.ru/leads/detail/{amo_lead_id}
 }
 ```
 
-`speaker` — только `manager` или `client`. `start` и `end` — секунды от начала записи.
+`speaker` — `manager` или `client`. Время — секунды от начала файла.
 
-## `settings`
-
-Одна строка на аккаунт.
+Элемент `stages_json`:
 
 ```json
 {
-  "min_call_duration_sec": 180,
-  "import_days": 30,
-  "timezone": "Europe/Moscow",
-  "weights": {
-    "opening": 0.15,
-    "needs": 0.30,
-    "presentation": 0.20,
-    "objections": 0.20,
-    "closing": 0.15
-  },
-  "user_sync_interval_hours": 6,
-  "poll_interval_sec": 90,
-  "poll_lookback_sec": 900,
-  "recording_recheck_delays_sec": [60, 300, 900],
-  "transcribe_concurrency": 2,
-  "analyze_concurrency": 2,
-  "prompt_version": "scorecard-v1"
+  "key": "opening",
+  "title": "Открытие",
+  "weight": 0.15,
+  "score": 85,
+  "comment": "Хорошо установил контакт"
 }
 ```
 
-Сумма `weights` обязана быть 1. Проверку делает `api` при сохранении.
+## Чего в ядре нет
 
-## `telephony_extensions`
-
-Запасной словарь, если в звонке нет id пользователя amoCRM.
-
-| Поле | Смысл |
-| --- | --- |
-| `id` | наш id |
-| `account_id` | аккаунт |
-| `extension` | номер или идентификатор абонента телефонии |
-| `amo_user_id` | кому принадлежит |
-
-Уникальность: `(account_id, extension)`.
-
-## `amo_events`
-
-Технический журнал входящих событий.
-
-| Поле | Смысл |
-| --- | --- |
-| `id` | наш id |
-| `account_id` | аккаунт, если уже известен |
-| `source` | `webhook` или `poll` |
-| `payload` | исходное тело |
-| `received_at` | когда увидели |
-| `processed_at` | когда разбор закончился |
-| `process_status` | `pending`, `processed`, `ignored`, `failed` |
-| `call_id` | созданный или найденный звонок |
-
-## Что сознательно не храним отдельными таблицами
-
-Компания вложена в контакт. Агрегаты менеджера не материализуем: `api` считает средние запросом к `call_analysis` за период. Короткий звонок ниже порога не храним.
+Таблиц подключений CRM, токенов, воронок, сырых webhook и словаря добавочных. Агрегаты менеджера не хранятся отдельно: `api` считает их по `call_analysis` за период. Компания не выделена в свою сущность: это строка на контакте и на звонке.

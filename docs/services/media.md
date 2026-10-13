@@ -1,81 +1,105 @@
 # Сервис `media`
 
-Скачивает запись разговора и кладёт копию в хранилище. С amoCRM не разговаривает. Транскрипцию не строит.
+Приводит запись к файлу в хранилище. CRM не вызывает. Транскрипт не строит.
 
-Способ получения файла зависит от поля `source.type`. В первой версии реализован только `url`. Тип `telephony` описан как вход, который вернёт управляемую ошибку, пока нет выбранного провайдера.
+Два входа в одно задание: скачать URL, который ядро уже признало годным к скачиванию без секретов, или взять объект, который `api` положил при ручной загрузке. Защищённый файл телефонии сюда не приходит: его байты до этого передаёт источник через `api`.
 
 ## Вход
 
-Очередь `calls.audio.fetch`:
+Очередь `calls.audio.fetch`.
+
+Скачивание:
 
 ```json
 {
   "message_id": "uuid",
+  "project_id": "uuid",
   "call_id": "uuid",
   "attempt": 1,
-  "enqueued_at": "2026-10-05T20:15:00+03:00",
-  "source": {
+  "enqueued_at": "2026-10-13T12:00:00+03:00",
+  "audio": {
     "type": "url",
-    "url": "https://telephony.example/recordings/abc"
+    "url": "https://records.example/abc.mp3"
   }
 }
 ```
 
-Допустимые значения `source.type`: `url`, `telephony`.
+Уже лежащий файл:
 
-Для `url` обязательны `source.url`. Для `telephony` обязательны `source.provider` и `source.external_id`. Тело `telephony` сервис принимает и завершает попытку ошибкой `telephony_provider_not_configured`, без скачивания. После трёх таких попыток звонок станет `failed`. Это сделано специально: конвейер не молчит, если `crm-sync` опубликовал ещё не поддержанный источник.
+```json
+{
+  "message_id": "uuid",
+  "project_id": "uuid",
+  "call_id": "uuid",
+  "attempt": 1,
+  "enqueued_at": "2026-10-13T12:00:00+03:00",
+  "audio": {
+    "type": "object",
+    "bucket": "recordings",
+    "key": "projects/p1/calls/58374.mp3",
+    "content_type": "audio/mpeg"
+  }
+}
+```
 
-Дополнительно сервис читает строку `calls` по `call_id`. Если `recording_storage_key` уже заполнен, новое скачивание не выполняется и сразу публикуется выходное сообщение.
+Сервис читает строку `calls`. Если `recording_storage_key` уже заполнен и `duration_sec` уже известен, скачивание и проверка порога пропускаются, сразу публикуется выход. Если ключ заполнен, а длительность ещё пустая, скачивания нет, выполняется только чтение длительности из файла.
 
-Переменные окружения: адрес, бакет и ключи `minio`. Для будущего `telephony` — секрет провайдера, когда он появится.
+Переменные окружения: адрес, бакет и ключи `minio`.
+
+В начале работы статус `audio_fetch`.
 
 ## Выход
 
 ### Файл
 
-Объект в бакете `recordings`:
+Для `type=url` объект появляется в бакете `recordings`:
 
 ```text
-calls/{call_id}.{ext}
+projects/{project_id}/calls/{call_id}.{ext}
 ```
 
-`ext` берётся из `Content-Type` ответа или из пути URL: `mp3`, `wav`, `ogg`, `mpeg`. Если тип не распознан, расширение `bin`, а исходный `Content-Type` всё равно пишется в `recording_content_type`.
+`ext` берётся из `Content-Type` или из пути URL: `mp3`, `wav`, `ogg`, `mpeg`. Неизвестный тип получает расширение `bin`, исходный MIME пишется в `recording_content_type`.
 
-### Поля звонка
+Для `type=object` ключ уже задан во входе. Сервис его не копирует второй раз.
 
-Перед скачиванием: `processing_status=audio_fetch`.
+Если `duration_sec` был пуст, сервис читает длительность из метаданных файла и записывает её в `calls.duration_sec`.
 
-После успешной записи объекта:
+### Дальше по длительности
 
-| Поле | Значение |
+Порог берётся из `projects.min_call_duration_sec`.
+
+| Ситуация | Результат |
 | --- | --- |
-| `recording_storage_key` | `calls/{call_id}.{ext}` |
-| `recording_content_type` | MIME |
-| `processing_status` | не меняется на финальный; следующее состояние поставит `transcriber` |
+| длительность известна и она ниже порога | `processing_status=skipped_short`, сообщения `calls.transcribe` нет |
+| длительность известна и она не ниже порога | публикуется `calls.transcribe` |
+| метаданных длительности нет | публикуется `calls.transcribe`, порог к этому файлу не применяется |
+
+Проверка касается только пустой длительности. Значение, уже пришедшее в `POST` и принятое `api`, повторно не отклоняется.
 
 ### Сообщение `calls.transcribe`
 
 ```json
 {
   "message_id": "uuid",
+  "project_id": "uuid",
   "call_id": "uuid",
   "attempt": 1,
-  "enqueued_at": "2026-10-05T20:16:00+03:00",
+  "enqueued_at": "2026-10-13T12:02:00+03:00",
   "audio": {
     "bucket": "recordings",
-    "key": "calls/58374.mp3",
+    "key": "projects/p1/calls/58374.mp3",
     "content_type": "audio/mpeg"
   }
 }
 ```
 
-### Ошибки скачивания
+### Ошибки
 
 | Ситуация | Результат |
 | --- | --- |
-| ответ 404 или 410 | сразу `processing_status=recording_missing`, следующего сообщения нет |
-| таймаут, сеть, 408, 429, 5xx | повтор до 3 попыток, затем `failed`, `error.stage=audio` |
-| пустое тело файла | то же, что сеть: повтор, затем `failed` |
-| `source.type=telephony` без настроенного провайдера | повтор, затем `failed`, `error.message=telephony_provider_not_configured` |
+| ответ 404 или 410 | сразу `recording_missing`, следующего сообщения нет |
+| таймаут, сеть, 408, 429, 5xx | повтор до 3, затем `failed`, `error.stage=audio` |
+| пустое тело | то же, что сеть |
+| объект из задания отсутствует в бакете | повтор до 3, затем `failed`, `error.stage=audio` |
 
-`recording_source_url` этот сервис не изменяет.
+`recording_source_url` сервис не меняет. Для скачанного URL он уже записан `api`.
