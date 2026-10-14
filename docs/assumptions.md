@@ -9,7 +9,7 @@
 | A3 | Сервисы ядра передают работу через Redis. База ядра одна. Плагин пишет только по HTTP и в свою базу. | [architecture.md](architecture.md) |
 | A4 | Язык реализации не выбран. Контракты — HTTP и сообщения очереди. Redis остаётся транспортом очереди. | [architecture.md](architecture.md) |
 | A5 | Файл по URL ядро копирует в хранилище. Файл с формы пишет `api`. Если URL требует секрет CRM или телефонии, источник скачивает файл сам и присылает байты. | [intake.md](intake.md), [services/media.md](services/media.md) |
-| A6 | Речевой движок и LLM спрятаны за `transcriber` и `analyzer`. На границе виден JSON. | [services/transcriber.md](services/transcriber.md), [services/analyzer.md](services/analyzer.md) |
+| A6 | Распознавание и оценка вызывают внешние API. Локальные модели не запускаются. Провайдера меняют по лучшему качеству на потраченные деньги. На границе сервисов виден JSON. | [services/transcriber.md](services/transcriber.md), [services/analyzer.md](services/analyzer.md) |
 | A7 | На оценку влияют транскрипт, промпт и скрипты. Итог считает `analyzer` по весам. Поля, приложенные к записи, в модель не уходят. | [services/analyzer.md](services/analyzer.md) |
 | A8 | Новый проект получает пять этапов продажи с весами 15 / 30 / 20 / 20 / 15. Карточку можно заменить. Готовые звонки не пересчитываются. | [product.md](product.md) |
 | A9 | Известная длительность ниже порога отклоняется ответом `422`, строки нет. Длительность, выясненная из файла, оставляет строку `skipped_short` без анализа. | [intake.md](intake.md) |
