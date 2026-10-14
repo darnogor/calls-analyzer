@@ -4,7 +4,7 @@
 
 ## Результат
 
-Экраны из [продукта](../product.md): список проектов, звонки, загрузка, карточка звонка, менеджеры, карточка менеджера, настройки проекта.
+Экраны из [продукта](../product.md): вход, аккаунты, список проектов, звонки, загрузка, карточка звонка, менеджеры, карточка менеджера, настройки проекта.
 
 ## Вход
 
@@ -15,6 +15,8 @@
 Адреса:
 
 ```text
+/login
+/accounts
 /
 /p/{project_id}/calls?manager={manager_id}&date_from=2026-10-13&date_to=2026-10-13&q=&deal_status=&sort=stage.objections&order=asc&page=1
 /p/{project_id}/calls/new
@@ -22,6 +24,7 @@
 /p/{project_id}/managers?date_from=2026-10-13&date_to=2026-10-13&sort=overall&order=asc
 /p/{project_id}/managers/{manager_id}
 /p/{project_id}/settings
+/p/{project_id}/inputs
 ```
 
 Период по умолчанию на «Звонках» и «Менеджерах» — текущие сутки в часовом поясе проекта.
@@ -32,6 +35,13 @@
 
 | Действие | Запрос |
 | --- | --- |
+| Войти | `POST /api/session` |
+| Выйти | `DELETE /api/session` |
+| Понять, кто вошёл и какие у него проекты | `GET /api/me` |
+| Открыть список аккаунтов | `GET /api/accounts` |
+| Создать аккаунт | `POST /api/accounts` |
+| Выключить аккаунт или задать новый пароль | `PATCH /api/accounts/{account_id}` |
+| Назначить роли в проектах | `PUT /api/accounts/{account_id}/projects` |
 | Открыть список проектов | `GET /api/projects` |
 | Создать проект | `POST /api/projects` |
 | Открыть список звонков | `GET /api/projects/{project_id}/calls` |
@@ -41,10 +51,15 @@
 | Список менеджеров | `GET /api/projects/{project_id}/managers` |
 | Карточка менеджера | `GET /api/projects/{project_id}/managers/{manager_id}` и `GET .../managers/{manager_id}/calls` |
 | Фильтры и заголовки колонок | `GET /api/projects/{project_id}/filters` |
-| Настройки | `GET /api/projects/{project_id}/settings` и `GET .../sources` |
-| Сохранить карточку оценки и порог | `PUT /api/projects/{project_id}/settings` |
+| Промпты | `GET /api/projects/{project_id}/settings` |
+| Сохранить промпт и порог | `PUT /api/projects/{project_id}/settings` |
+| Список карточек и скриптов | `GET /api/projects/{project_id}/inputs` |
+| Сохранить карточку или скрипт | `POST /api/projects/{project_id}/inputs` |
+| Источники | `GET /api/projects/{project_id}/sources` |
 | Выпустить код подключения источника | `POST /api/projects/{project_id}/sources` |
 | Переименовать ручного менеджера | `PATCH /api/projects/{project_id}/managers/{manager_id}` |
+
+Кнопки создания проекта, экран `/accounts` и `/settings` рисуются только администратору. `/inputs`, форма загрузки звонка, источники и правка имени ручного участника разговора — только руководителю. Менеджер по продажам видит списки звонков, карточки разговоров, сводку участников и плеер.
 
 После выпуска кода браузер открывает `/plugins/amocrm/connect?setup_code={code}`, когда выбран поставщик `amocrm`. Другой поставщик откроет свой префикс. Страницу OAuth рисует плагин.
 
