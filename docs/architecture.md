@@ -161,7 +161,7 @@ flowchart LR
 | Данные | Пишет | Читают |
 | --- | --- | --- |
 | `accounts`, `project_memberships` | `api` | `api` |
-| `project_inputs` | `api` | `analyzer` на момент оценки |
+| `project_inputs` | `api` | `analyzer` читает только скрипты |
 | `projects`, `scorecards`, `sources` | `api` | `transcriber`, `analyzer` читают карточку |
 | `managers`, `contacts` | `api` | `api`, `analyzer` |
 | карточка `calls`, контекст, внешние адреса | `api` | все сервисы ядра |
