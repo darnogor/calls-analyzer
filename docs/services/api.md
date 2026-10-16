@@ -2,7 +2,7 @@
 
 Единственный HTTP-интерфейс ядра. Принимает звонок по [контракту](../intake.md), хранит проекты и карточку оценки, отдаёт JSON экранам. В CRM не ходит. Токены CRM не хранит.
 
-Файл с формы кладёт в `minio` сам. Файл по URL не скачивает: публикует задание, его выполнит `media`. Для плеера подписывает временную ссылку на уже лежащий объект.
+Файл с формы кладёт в `minio` сам. Файл по URL не скачивает: публикует задание, его выполнит `media`. Для плеера сам отдаёт байты записи. Адрес хранилища наружу не выдаёт.
 
 ## Вход
 
@@ -94,7 +94,6 @@ PUT /api/projects/{project_id}/settings
 {
   "timezone": "Europe/Moscow",
   "min_call_duration_sec": 180,
-  "ask_next_step": true,
   "stages": [
     {
       "key": "opening",
@@ -108,7 +107,7 @@ PUT /api/projects/{project_id}/settings
 
 Язык в этом запросе не передаётся: распознавание и промпты пока русские для всей установки.
 
-В `stages` не меньше одного элемента. `key` уникален, совпадает с шаблоном `[a-z0-9_]+` и после создания этапа не меняется через этот запрос: новый `key` добавляет этап, пропавший из списка — убирает его из будущих оценок. Сумма `weight` равна 1. `min_call_duration_sec` — целое больше нуля. Успешное сохранение увеличивает `scorecards.version`. Готовые `call_analysis` сервис не переписывает.
+В `stages` ровно пять ключей: `opening`, `needs`, `presentation`, `objections`, `closing`. Другой набор — `422` `{ "error": "stage_set_is_fixed" }`. Меняются `title`, `weight` и `instruction`. Сумма `weight` равна 1. `min_call_duration_sec` — целое больше нуля. Успешное сохранение увеличивает `scorecards.version`. Готовые `call_analysis` сервис не переписывает.
 
 ### Источники
 
@@ -191,7 +190,7 @@ GET /api/projects/{project_id}/filters
 | --- | --- |
 | `manager_id` | id менеджера в ядре; пусто — все |
 | `date_from`, `date_to` | календарные даты включительно в поясе проекта, сравнение по `started_at` |
-| `q` | подстрока в имени контакта, компании или телефоне |
+| `q` | подстрока в имени контакта, компании, телефоне, имени менеджера или названии сделки |
 | `deal_status` | точное `current_deal_status_name` |
 | `field_key`, `field_value` | оба сразу: точное совпадение с одним произвольным полем звонка. Одно без другого — `400` |
 | `sort` | `started_at`, `manager`, `overall` или `stage.{key}` текущего проекта |
@@ -201,7 +200,7 @@ GET /api/projects/{project_id}/filters
 
 По умолчанию `sort=started_at` и `order=desc`. В списке только `processing_status=completed`.
 
-`GET .../calls/{id}/recording` подписывает ссылку, если у звонка есть `recording_storage_key`.
+`GET .../calls/{id}/recording` читает объект из хранилища и отдаёт его байты, если у звонка есть `recording_storage_key`.
 
 ## Выход
 
@@ -441,7 +440,6 @@ GET /api/projects/{project_id}/filters
   ],
   "overall_score": 67,
   "summary": "Клиент заинтересован. Основная потребность выявлена.",
-  "next_step_detected": false,
   "transcript": [
     {
       "speaker": "manager",
@@ -459,7 +457,15 @@ GET /api/projects/{project_id}/filters
 
 ### Запись для плеера
 
-`GET .../calls/{id}/recording` отвечает `302` на ссылку чтения объекта. Срок ссылки — 15 минут. Файла нет — `404` `{ "error": "recording_missing" }`.
+`GET .../calls/{id}/recording` отвечает `200` и телом файла. `Content-Type` берётся из `recording_content_type`. Файла нет — `404` `{ "error": "recording_missing" }`. Браузер использует этот адрес как источник плеера. Ссылки на `minio` в ответе нет.
+
+### Проблемы обработки
+
+```http
+GET /api/projects/{project_id}/calls?view=problems
+```
+
+Администратор и руководитель. Менеджер по продажам получает `403`. В выборке статусы `failed`, `recording_missing`, `skipped_short`. У элемента есть `processing_status` и `error`. Оценок нет. Пагинация та же, что у обычного списка.
 
 ### Менеджеры
 

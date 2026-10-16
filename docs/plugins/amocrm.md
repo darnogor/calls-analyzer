@@ -167,7 +167,6 @@ https://{subdomain}.amocrm.ru/leads/detail/{lead_id}
   "deal": {
     "external_id": "789",
     "name": "Поставка",
-    "price": 150000,
     "status_at_call_name": "Переговоры",
     "current_status_name": "Переговоры",
     "external_url": "https://example.amocrm.ru/leads/detail/789",
@@ -214,7 +213,7 @@ https://{subdomain}.amocrm.ru/leads/detail/{lead_id}
 
 Активная сделка — статус не успешный и не проигранный по локальному справочнику воронок. Случайную сделку из нескольких плагин не выбирает.
 
-При `linked` в тело попадают id, название, бюджет, обе стадии одним и тем же текстом и готовый URL.
+При `linked` в тело попадают id, название, обе стадии одним и тем же текстом и готовый URL. Бюджет сделки в ядро не передаётся.
 
 ### Повторное чтение записи
 
@@ -252,7 +251,7 @@ https://{subdomain}.amocrm.ru/leads/detail/{lead_id}
 
 ### `telephony_extensions`
 
-`connection_id`, `extension`, `amo_user_id`. Уникальность `(connection_id, extension)`. Экран правки в первой версии не описан, см. вопрос 8.
+`connection_id`, `extension`, `amo_user_id`. Уникальность `(connection_id, extension)`. Экрана правки в первой версии нет. Он появится, только если живой звонок покажет, что менеджера иначе не найти. До этой проверки код плагина не пишем: сначала один реальный звонок из подключённой телефонии.
 
 ### `pending_recordings`
 

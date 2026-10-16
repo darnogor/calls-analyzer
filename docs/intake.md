@@ -45,7 +45,6 @@ Content-Type: application/json
   "deal": {
     "external_id": "deal-789",
     "name": "Поставка",
-    "price": 150000,
     "status_at_call_name": "Переговоры",
     "current_status_name": "Переговоры",
     "external_url": "https://crm.example/deals/789",
@@ -83,11 +82,10 @@ Content-Type: application/json
 | `contact.external_id` | для плагина, если блок `contact` есть | Id контакта в системе источника |
 | `contact.name` | да, если блок есть | Имя |
 | `contact.external_url` | нет | Готовая ссылка. Ядро её не собирает |
-| `company_name` | нет | Название компании. Может прийти без контакта |
+| `company_name` | нет | Компания на момент звонка. Может прийти без контакта. Позже не переписывается |
 | `deal` | нет | Сделка. Пустой блок сохраняется как `link_status=absent` |
 | `deal.external_id` | если `link_status=linked` | Id сделки у источника |
 | `deal.name` | нет | Название |
-| `deal.price` | нет | Бюджет числом, как его передал источник |
 | `deal.status_at_call_name` | нет | Стадия в момент звонка, уже человеческим текстом |
 | `deal.current_status_name` | нет | Текущая стадия. При создании обычно равна стадии на момент звонка |
 | `deal.external_url` | нет | Готовая ссылка на сделку |
@@ -228,7 +226,7 @@ Content-Type: application/json
 }
 ```
 
-Обновляет контакт этого источника и `company_name` на звонках, где он указан. Неизвестный id — `404`.
+Обновляет имя, текущую компанию и ссылку контакта. `company_name` уже созданных звонков не меняет. Неизвестный id — `404`.
 
 ```http
 PATCH /api/projects/{project_id}/deals/by-external-id/{external_id}
@@ -239,8 +237,7 @@ Content-Type: application/json
 {
   "name": "Поставка",
   "current_status_name": "Счет выставлен",
-  "external_url": "https://crm.example/deals/789",
-  "price": 150000
+  "external_url": "https://crm.example/deals/789"
 }
 ```
 

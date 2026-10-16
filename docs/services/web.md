@@ -10,7 +10,7 @@
 
 1. Действия человека: смена проекта, фильтры, сортировка, клик по строке, таймкод, плеер, форма загрузки, сохранение карточки оценки.
 2. Ответы `api` из [api.md](api.md).
-3. Файл записи по короткой ссылке `api`. Его воспроизводит браузер.
+3. Файл записи ответом `api`. Его воспроизводит браузер. Адрес хранилища в страницу не попадает.
 
 Адреса:
 
@@ -21,6 +21,7 @@
 /p/{project_id}/calls?manager={manager_id}&date_from=2026-10-13&date_to=2026-10-13&q=&deal_status=&sort=stage.objections&order=asc&page=1
 /p/{project_id}/calls/new
 /p/{project_id}/calls/{call_id}
+/p/{project_id}/problems
 /p/{project_id}/managers?date_from=2026-10-13&date_to=2026-10-13&sort=overall&order=asc
 /p/{project_id}/managers/{manager_id}
 /p/{project_id}/settings
@@ -46,7 +47,8 @@
 | Создать проект | `POST /api/projects` |
 | Открыть список звонков | `GET /api/projects/{project_id}/calls` |
 | Открыть карточку | `GET /api/projects/{project_id}/calls/{id}` |
-| Включить запись | `GET /api/projects/{project_id}/calls/{id}/recording` |
+| Включить запись | `GET /api/projects/{project_id}/calls/{id}/recording`, ответ с байтами файла |
+| Открыть проблемы обработки | `GET /api/projects/{project_id}/calls?view=problems` |
 | Загрузить звонок | `POST /api/projects/{project_id}/calls` как `multipart` |
 | Список менеджеров | `GET /api/projects/{project_id}/managers` |
 | Карточка менеджера | `GET /api/projects/{project_id}/managers/{manager_id}` и `GET .../managers/{manager_id}/calls` |
@@ -59,7 +61,7 @@
 | Выпустить код подключения источника | `POST /api/projects/{project_id}/sources` |
 | Переименовать ручного менеджера | `PATCH /api/projects/{project_id}/managers/{manager_id}` |
 
-Администратор видит все действия. Руководитель видит загрузку звонка, произвольные поля, скрипты, источники и правку имени ручного участника. Кнопки проектов, аккаунтов и промптов у руководителя скрыты. Менеджер по продажам видит списки звонков, карточки разговоров, сводку участников и плеер.
+Администратор видит все действия. Руководитель видит загрузку звонка, произвольные поля, скрипты, источники и правку имени ручного участника. Кнопки проектов, аккаунтов и промптов у руководителя скрыты. Менеджер по продажам видит все звонки проекта, карточки разговоров, сводку участников и плеер. Список проблем ему не показывают.
 
 После выпуска кода браузер открывает `/plugins/amocrm/connect?setup_code={code}`, когда выбран поставщик `amocrm`. Другой поставщик откроет свой префикс. Страницу OAuth рисует плагин.
 
