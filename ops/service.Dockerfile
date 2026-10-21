@@ -5,10 +5,12 @@ COPY apps/api/package.json apps/api/package.json
 COPY apps/media/package.json apps/media/package.json
 COPY apps/transcriber/package.json apps/transcriber/package.json
 COPY apps/analyzer/package.json apps/analyzer/package.json
+COPY packages/chat-completions/package.json packages/chat-completions/package.json
 RUN npm ci
 ARG SERVICE
 COPY apps/${SERVICE} apps/${SERVICE}
-RUN npm run build -w @calls/${SERVICE}
+COPY packages/chat-completions packages/chat-completions
+RUN npm run build -w @calls/chat-completions && npm run build -w @calls/${SERVICE}
 
 FROM node:22-alpine
 WORKDIR /app
@@ -18,10 +20,12 @@ COPY apps/api/package.json apps/api/package.json
 COPY apps/media/package.json apps/media/package.json
 COPY apps/transcriber/package.json apps/transcriber/package.json
 COPY apps/analyzer/package.json apps/analyzer/package.json
+COPY packages/chat-completions/package.json packages/chat-completions/package.json
 RUN npm ci --omit=dev
 ARG SERVICE
 ENV SERVICE=${SERVICE}
 COPY --from=build /app/apps/${SERVICE}/dist apps/${SERVICE}/dist
+COPY --from=build /app/packages/chat-completions/dist packages/chat-completions/dist
 COPY migrations /app/migrations
 EXPOSE 3000
 USER node

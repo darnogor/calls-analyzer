@@ -53,13 +53,72 @@ function psql(sql) {
   ]).trim();
 }
 
-function redisMessages() {
-  const raw = docker(['compose', 'exec', '-T', 'redis', 'redis-cli', 'LRANGE', 'calls.audio.fetch', '0', '-1']);
+function redisMessages(queue = 'calls.audio.fetch') {
+  const raw = docker(['compose', 'exec', '-T', 'redis', 'redis-cli', 'LRANGE', queue, '0', '-1']);
   return raw
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+let workersPaused = false;
+
+function pausePipeline() {
+  docker(['compose', 'pause', 'media', 'transcriber', 'analyzer']);
+  workersPaused = true;
+}
+
+function resumePipeline() {
+  if (!workersPaused) {
+    return;
+  }
+  docker(['compose', 'unpause', 'media', 'transcriber', 'analyzer']);
+  workersPaused = false;
+}
+
+process.on('exit', () => {
+  if (!workersPaused) {
+    return;
+  }
+  try {
+    resumePipeline();
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+function wavSeconds(seconds) {
+  const sampleRate = 8000;
+  const dataSize = Math.round(seconds * sampleRate) * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  return buffer;
+}
+
+async function waitForCall(projectId, callId, cookie, ready) {
+  let last = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const card = await api(`/api/projects/${projectId}/calls/${callId}`, { cookie });
+    last = card.body;
+    if (card.status === 200 && ready(card.body)) {
+      return card.body;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`call ${callId} did not reach the expected state: ${JSON.stringify(last)}`);
 }
 
 async function api(path, options = {}) {
@@ -132,6 +191,8 @@ for (const service of ['api', 'media', 'transcriber', 'analyzer']) {
   ]).trim();
   assert.equal(output, 'ok', service);
 }
+
+pausePipeline();
 
 assert.equal((await api('/api/me')).status, 401);
 assert.deepEqual((await api('/api/me')).body, { error: 'unauthenticated' });
@@ -562,9 +623,49 @@ assert.equal(redisMessages().filter((item) => item.call_id === doneId).length, q
 psql(`update accounts set is_active = false where id = ${quote(leadId)}`);
 assert.equal((await api('/api/me', { cookie: lead })).status, 401);
 
+const shortForm = new FormData();
+shortForm.append('payload', JSON.stringify({ started_at: startedAt, direction: 'out' }));
+shortForm.append('file', new Blob([wavSeconds(1)], { type: 'audio/wav' }), 'short.wav');
+const shortUpload = await api(`/api/projects/${projectId}/calls`, {
+  method: 'POST',
+  cookie: admin,
+  form: shortForm,
+});
+assert.equal(shortUpload.status, 201);
+assert.equal(shortUpload.body.processing_status, 'audio_queued');
+const shortId = shortUpload.body.id;
+
 const loggedOut = await api('/api/session', { method: 'DELETE', cookie: admin });
 assert.equal(loggedOut.status, 204);
 assert.match(loggedOut.setCookie[0], /Max-Age=0/i);
 assert.equal((await api('/api/me')).status, 401);
+
+const again = await api('/api/session', {
+  method: 'POST',
+  json: { email: 'admin@example.com', password: 'admin-password' },
+});
+assert.equal(again.status, 204);
+const adminAgain = sessionCookie(again.setCookie);
+
+resumePipeline();
+
+const shortCard = await waitForCall(projectId, shortId, adminAgain, (body) => body.processing_status === 'skipped_short');
+assert.equal(shortCard.duration_sec, 1);
+assert.equal('error' in shortCard, false);
+assert.equal(redisMessages('calls.transcribe').some((item) => item.call_id === shortId), false);
+assert.equal(
+  psql(`select coalesce(transcript_json::text, '') from call_analysis where call_id = ${quote(shortId)}`),
+  '',
+);
+
+const failedSpeech = await waitForCall(
+  projectId,
+  callId,
+  adminAgain,
+  (body) => body.processing_status === 'failed' && body.error?.message === 'provider_unavailable',
+);
+assert.equal(failedSpeech.error.stage, 'transcribe');
+assert.equal(failedSpeech.error.attempts, 3);
+assert.equal(redisMessages('calls.analyze').some((item) => item.call_id === callId), false);
 
 console.log('e2e ok');

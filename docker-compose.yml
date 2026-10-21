@@ -96,7 +96,22 @@ services:
       args:
         SERVICE: media
     environment:
+      DATABASE_URL: postgresql://calls:calls@postgres:5432/calls
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio-secret
+      S3_BUCKET: recordings
+      MEDIA_FETCH_TIMEOUT_MS: "10000"
+      MEDIA_CONCURRENCY: "4"
       PORT: "3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     expose:
       - "3000"
     healthcheck: *node-health
@@ -109,7 +124,25 @@ services:
       args:
         SERVICE: transcriber
     environment:
+      DATABASE_URL: postgresql://calls:calls@postgres:5432/calls
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio-secret
+      S3_BUCKET: recordings
+      STT_API_URL: ${STT_API_URL:-}
+      STT_API_KEY: ${STT_API_KEY:-}
+      STT_PROVIDER: ${STT_PROVIDER:-}
+      STT_TIMEOUT_MS: ${STT_TIMEOUT_MS:-120000}
+      TRANSCRIBE_CONCURRENCY: ${TRANSCRIBE_CONCURRENCY:-2}
       PORT: "3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     expose:
       - "3000"
     healthcheck: *node-health
@@ -122,7 +155,19 @@ services:
       args:
         SERVICE: analyzer
     environment:
+      DATABASE_URL: postgresql://calls:calls@postgres:5432/calls
+      REDIS_URL: redis://redis:6379
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-120000}
+      ANALYZE_CONCURRENCY: ${ANALYZE_CONCURRENCY:-2}
       PORT: "3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     expose:
       - "3000"
     healthcheck: *node-health
