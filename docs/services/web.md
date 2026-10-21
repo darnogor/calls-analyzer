@@ -54,7 +54,7 @@
 | Карточка менеджера | `GET /api/projects/{project_id}/managers/{manager_id}` и `GET .../managers/{manager_id}/calls` |
 | Фильтры и заголовки колонок | `GET /api/projects/{project_id}/filters` |
 | Промпты | `GET /api/projects/{project_id}/settings` |
-| Сохранить промпт и порог | `PUT /api/projects/{project_id}/settings` |
+| Сохранить промпт, порог и часовой пояс | `PUT /api/projects/{project_id}/settings` |
 | Список скриптов | `GET /api/projects/{project_id}/inputs` |
 | Сохранить скрипт | `POST /api/projects/{project_id}/inputs` |
 | Источники | `GET /api/projects/{project_id}/sources` |
