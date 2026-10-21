@@ -191,7 +191,7 @@
 }
 ```
 
-`speaker` — `manager` или `client`. Время — секунды от начала файла.
+`speaker` — `manager` или `client`. В массиве лежит весь разговор, не только реплики менеджера. Время — секунды от начала файла. Как ставится роль — в [transcriber.md](services/transcriber.md).
 
 Элемент `stages_json`:
 
