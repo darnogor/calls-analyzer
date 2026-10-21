@@ -400,7 +400,7 @@ GET /api/projects/{project_id}/filters
 
 ### `GET .../calls/{id}`
 
-Поля списка плюс статус, снимок комментариев и транскрипт. Метод отдаёт звонок в любом статусе. У незавершённого `stages`, `summary` и `transcript` равны `null`.
+Поля списка плюс статус, снимок комментариев и транскрипт. Метод отдаёт звонок в любом статусе, и карточка показывает этот `processing_status`. У незавершённого `stages`, `summary` и `transcript` равны `null`. При `failed` в ответе есть `error`.
 
 ```json
 {
@@ -464,7 +464,15 @@ GET /api/projects/{project_id}/filters
 GET /api/projects/{project_id}/calls?view=problems
 ```
 
-Администратор и руководитель. Менеджер по продажам получает `403`. В выборке статусы `failed`, `recording_missing`, `skipped_short`, `skipped_no_duration`. У элемента есть `processing_status` и `error`. Оценок нет. Пагинация та же, что у обычного списка.
+Администратор и руководитель. Менеджер по продажам получает `403`. В выборке статусы `failed`, `recording_missing`, `skipped_short`, `skipped_no_duration`. У элемента есть `processing_status` и `error`. Оценок нет. Пагинация та же, что у обычного списка. `skipped_short` и `skipped_no_duration` остаются здесь, а не в списке звонков в работе.
+
+### Звонки в работе
+
+```http
+GET /api/projects/{project_id}/calls?view=progress
+```
+
+Администратор и руководитель. Менеджер по продажам получает `403`. В выборке статусы `recording_pending`, `audio_queued`, `audio_fetch`, `transcribing`, `analyzing`. Оценок нет. Пагинация та же, что у обычного списка.
 
 ### Менеджеры
 

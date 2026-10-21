@@ -22,6 +22,7 @@
 /p/{project_id}/calls/new
 /p/{project_id}/calls/{call_id}
 /p/{project_id}/problems
+/p/{project_id}/progress
 /p/{project_id}/managers?date_from=2026-10-13&date_to=2026-10-13&sort=overall&order=asc
 /p/{project_id}/managers/{manager_id}
 /p/{project_id}/settings
@@ -49,6 +50,7 @@
 | Открыть карточку | `GET /api/projects/{project_id}/calls/{id}` |
 | Включить запись | `GET /api/projects/{project_id}/calls/{id}/recording`, ответ с байтами файла |
 | Открыть проблемы обработки | `GET /api/projects/{project_id}/calls?view=problems` |
+| Открыть звонки в работе | `GET /api/projects/{project_id}/calls?view=progress` |
 | Загрузить звонок | `POST /api/projects/{project_id}/calls` как `multipart` |
 | Список менеджеров | `GET /api/projects/{project_id}/managers` |
 | Карточка менеджера | `GET /api/projects/{project_id}/managers/{manager_id}` и `GET .../managers/{manager_id}/calls` |
@@ -61,7 +63,7 @@
 | Выпустить код подключения источника | `POST /api/projects/{project_id}/sources` |
 | Переименовать ручного менеджера | `PATCH /api/projects/{project_id}/managers/{manager_id}` |
 
-Администратор видит все действия. Руководитель видит загрузку звонка, произвольные поля, скрипты, источники и правку имени ручного участника. Кнопки проектов, аккаунтов и промптов у руководителя скрыты. Менеджер по продажам видит все звонки проекта, карточки разговоров, сводку участников и плеер. Список проблем ему не показывают.
+Администратор видит все действия. Руководитель видит загрузку звонка, произвольные поля, скрипты, источники и правку имени ручного участника. Кнопки проектов, аккаунтов и промптов у руководителя скрыты. Менеджер по продажам видит все готовые звонки проекта, карточки разговоров, сводку участников и плеер. Список проблем и список звонков в работе ему не показывают.
 
 После выпуска кода браузер открывает `/plugins/amocrm/connect?setup_code={code}`, когда выбран поставщик `amocrm`. Другой поставщик откроет свой префикс. Страницу OAuth рисует плагин.
 
