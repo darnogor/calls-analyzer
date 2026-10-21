@@ -150,7 +150,7 @@
 | `recording_storage_key` | ключ объекта |
 | `recording_content_type` | MIME |
 | `deal_external_id` | id сделки у источника |
-| `deal_name` | название |
+| `deal_name` | название на момент звонка; поздняя правка в CRM его не меняет |
 | `deal_status_at_call_name` | стадия в момент звонка |
 | `current_deal_status_name` | текущая стадия |
 | `deal_external_url` | готовая ссылка |
