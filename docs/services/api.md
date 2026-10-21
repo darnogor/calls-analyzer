@@ -350,7 +350,7 @@ GET /api/projects/{project_id}/filters
 
 `last_intake_at` источника обновляется на успешном приёме звонка и на успешном `PUT` менеджеров.
 
-Повтор того же `external_id` новую очередь не ставит, кроме случая `recording_pending`, когда запись пришла впервые.
+Повтор того же `external_id` новую очередь не ставит, кроме двух случаев. При `recording_pending` первая запись ставит звонок в очередь. При `recording_missing` рабочая запись возвращает звонок в `audio_queued`. Статусы `completed`, `skipped_short`, `skipped_no_duration` и `failed` этим не открываются заново.
 
 ### `GET .../calls`
 
