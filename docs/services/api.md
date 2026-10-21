@@ -346,7 +346,7 @@ GET /api/projects/{project_id}/filters
 
 Если пришёл файл, сервис сохраняет его как `projects/{project_id}/calls/{call_id}.{ext}` и публикует то же задание с `audio.type=object`, `bucket`, `key` и `content_type`.
 
-Если записи нет, статус `recording_pending`, в очередь ничего не ставится.
+Если записи нет, статус `recording_pending`, в очередь ничего не ставится. Ядро само этот статус не опрашивает и в CRM не ходит. Поздний файл принимается, пока статус остаётся `recording_pending`.
 
 `last_intake_at` источника обновляется на успешном приёме звонка и на успешном `PUT` менеджеров.
 
