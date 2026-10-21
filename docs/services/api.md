@@ -210,7 +210,7 @@ GET /api/projects/{project_id}/filters
 | `manager_id` | id менеджера в ядре; пусто — все |
 | `date_from`, `date_to` | календарные даты включительно в поясе проекта, сравнение по `started_at` |
 | `q` | подстрока в имени контакта, компании, телефоне, имени менеджера или названии сделки |
-| `deal_status` | точное `current_deal_status_name` |
+| `deal_status` | точное `current_deal_status_name`. Это стадия сделки, не этап карточки. Пустой пункт на экране — «Все стадии» |
 | `field_key`, `field_value` | оба сразу: точное совпадение с одним произвольным полем звонка. Одно без другого — `400` |
 | `sort` | `started_at`, `manager`, `overall` или `stage.{key}` текущего проекта |
 | `order` | `asc` или `desc` |
