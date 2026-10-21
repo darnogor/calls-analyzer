@@ -13,4 +13,18 @@
 - [Принятые решения](docs/assumptions.md)
 - [Открытые вопросы](docs/open-questions.md)
 
-Контракты ядра зафиксированы. Кода и контейнеров ещё нет. Код плагина amoCRM ждёт чеклист одного живого звонка. Имена провайдеров речи и оценки выбираются позже и ядро не блокируют.
+Контракты ядра зафиксированы в [docs/](docs/README.md). Плагин amoCRM в этот репозиторий не входит, пока не пройден чеклист одного живого звонка.
+
+Первый срез поднимается одним compose на одном сервере. Снаружи открыт только `ingress` (HTTPS). `api` принимает вход по cookie, проекты и ручную загрузку звонка. `web`, `media`, `transcriber` и `analyzer` отвечают на проверку живости и не выполняют конвейер.
+
+```bash
+docker compose up --build
+```
+
+Локальный администратор после старта: `admin@example.com` / `admin-password`. Когда стек здоров, сценарий среза запускается так: `node apps/api/test/e2e.mjs`.
+
+```bash
+curl -k -c /tmp/calls.cj -H 'content-type: application/json' \
+  -d '{"email":"admin@example.com","password":"admin-password"}' \
+  https://localhost/api/session
+```
