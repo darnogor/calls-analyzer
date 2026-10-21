@@ -145,7 +145,7 @@
 | `direction` | `in`, `out` или пусто |
 | `phone` | номер |
 | `started_at` | начало |
-| `duration_sec` | секунды; `media` дополняет, если при приёме было пусто |
+| `duration_sec` | секунды; если при приёме было пусто, `media` читает их из метаданных, а если там пусто — из файла. Прочитать нельзя — поле остаётся пустым |
 | `recording_source_url` | URL, который просили скачать |
 | `recording_storage_key` | ключ объекта |
 | `recording_content_type` | MIME |
