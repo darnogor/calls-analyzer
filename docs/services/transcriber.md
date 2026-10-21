@@ -76,8 +76,8 @@
 
 | Ситуация | Результат |
 | --- | --- |
-| файла нет в хранилище | повтор, затем `failed`, `error.stage=transcribe` |
-| провайдер недоступен или вернул ошибку | повтор, затем `failed` |
-| ноль реплик | повтор, затем `failed`, `error.message=empty_transcript` |
+| файла нет в хранилище | повтор, затем `failed`, `error.stage=transcribe`, `error.message=audio_object_missing` |
+| провайдер недоступен или вернул ошибку | повтор, затем `failed`, `error.stage=transcribe`, `error.message=provider_unavailable` |
+| ноль реплик | повтор, затем `failed`, `error.stage=transcribe`, `error.message=empty_transcript` |
 
 Реплики, размеченные по правилу выше, — нормальный выход, в том числе на одной дорожке. Дальше уходит весь транскрипт, со всеми говорящими. Статус `completed` ставит `analyzer`.

@@ -485,7 +485,7 @@ GET /api/projects/{project_id}/filters
 GET /api/projects/{project_id}/calls?view=problems
 ```
 
-Администратор и руководитель. Менеджер по продажам получает `403`. В выборке статусы `failed`, `recording_missing`, `skipped_short`, `skipped_no_duration`. У элемента есть `processing_status` и `error`. Оценок нет. Пагинация та же, что у обычного списка. `skipped_short` и `skipped_no_duration` остаются здесь, а не в списке звонков в работе.
+Администратор и руководитель. Менеджер по продажам получает `403`. В выборке статусы `failed`, `recording_missing`, `skipped_short`, `skipped_no_duration`. У элемента есть `processing_status` и `error`. `error.message` — код в `snake_case`, не фраза. Оценок нет. Пагинация та же, что у обычного списка. `skipped_short` и `skipped_no_duration` остаются здесь, а не в списке звонков в работе.
 
 ### Звонки в работе
 

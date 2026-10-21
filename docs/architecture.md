@@ -155,13 +155,13 @@ flowchart LR
 ```json
 {
   "stage": "transcribe",
-  "message": "пустой ответ распознавания",
+  "message": "empty_transcript",
   "attempts": 3,
   "failed_at": "2026-10-13T12:40:00+03:00"
 }
 ```
 
-`stage`: `audio`, `transcribe`, `analyze`.
+`message` — устойчивый код в `snake_case`, не фраза. Экран сам подставляет русский текст. `stage`: `audio`, `transcribe`, `analyze`.
 
 Сетевая ошибка и ответ 5xx на скачивании идут по трём попыткам и заканчиваются `failed`. Ответ 404 или 410 сразу даёт `recording_missing`. Если после этого плагин присылает рабочую запись, ядро принимает её и ставит `audio_queued`. Звонок в `completed`, `skipped_short`, `skipped_no_duration` или `failed` так не открывается заново.
 

@@ -102,8 +102,8 @@ projects/{project_id}/calls/{call_id}.{ext}
 | Ситуация | Результат |
 | --- | --- |
 | ответ 404 или 410 | сразу `recording_missing`, следующего сообщения нет |
-| таймаут, сеть, 408, 429, 5xx | повтор до 3, затем `failed`, `error.stage=audio` |
+| таймаут, сеть, 408, 429, 5xx | повтор до 3, затем `failed`, `error.stage=audio`, `error.message=audio_network_failure` |
 | пустое тело | то же, что сеть |
-| объект из задания отсутствует в бакете | повтор до 3, затем `failed`, `error.stage=audio` |
+| объект из задания отсутствует в бакете | повтор до 3, затем `failed`, `error.stage=audio`, `error.message=audio_object_missing` |
 
 `recording_source_url` сервис не меняет. Для скачанного URL он уже записан `api`.

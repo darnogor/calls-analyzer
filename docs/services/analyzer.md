@@ -135,7 +135,7 @@ overall = round(85*0.15 + 70*0.30 + 68*0.20 + 55*0.20 + 60*0.15)
 | Ситуация | Результат |
 | --- | --- |
 | нет транскрипта | повтор, затем `failed`, `error.stage=analyze`, `error.message=transcript_missing` |
-| модель недоступна | повтор, затем `failed` |
+| модель недоступна | повтор, затем `failed`, `error.stage=analyze`, `error.message=model_unavailable` |
 | ответ не JSON, другой набор ключей, пустые `comment` или `summary`, оценка вне 0–100 | повтор, затем `failed`, `error.message=invalid_model_json` |
 
 Невалидный JSON и неполный набор оценок не превращаются в частичный результат. Недостающие этапы не отбрасываются, чтобы записать остальные: из такого ответа в строку не попадает ничего. Этап повторяется, затем статус `failed` и `error.message=invalid_model_json`.
