@@ -75,3 +75,21 @@ test('empty deal filter is labeled for every deal stage', () => {
   assert.match(html, /Все менеджеры/);
   assert.doesNotMatch(html, /Все этапы/);
 });
+
+test('call table uses stage titles and does not add weight or instruction columns', () => {
+  const html = callsTable({
+    items: [],
+    stages: [{ key: 'opening', title: 'Приветствие' }],
+    timeZone: 'Europe/Moscow',
+    projectId: 'p1',
+    showManager: true,
+    showScores: true,
+    showStatus: false,
+    showError: false,
+    sort: 'started_at',
+    order: 'desc',
+  });
+  assert.match(html, /Приветствие/);
+  assert.doesNotMatch(html, /Формулировка/);
+  assert.doesNotMatch(html, /<th>[^<]*Вес/);
+});

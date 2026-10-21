@@ -19,6 +19,7 @@ import {
   parseRoute,
   readCallsQuery,
   routeAllowed,
+  stageColumns,
   scoreBand,
   todayInTimeZone,
   translateCallError,
@@ -141,6 +142,25 @@ test('russian plurals', async () => {
   assert.equal(plural(5, 'звонок', 'звонка', 'звонков'), 'звонков');
   assert.equal(plural(12, 'звонок', 'звонка', 'звонков'), 'звонков');
   assert.equal(plural(21, 'звонок', 'звонка', 'звонков'), 'звонок');
+});
+
+test('stage columns use filter titles and leave weight and instruction off the column', () => {
+  assert.deepEqual(
+    stageColumns([
+      { key: 'opening', title: 'Приветствие', weight: 0.2, instruction: 'Сказать имя' },
+      { key: 'needs', title: '', weight: 0.3, instruction: 'Спросить' },
+    ]),
+    [
+      { key: 'opening', title: 'Приветствие' },
+      { key: 'needs', title: 'Потребность' },
+    ],
+  );
+});
+
+test('manager list shows the last completed call', () => {
+  const pages = readFileSync(join(root, 'html/js/pages.js'), 'utf8');
+  assert.equal(pages.includes('Последний звонок'), true);
+  assert.equal(pages.includes('last_call_at'), true);
 });
 
 test('interface copy does not use the mock filter label', () => {

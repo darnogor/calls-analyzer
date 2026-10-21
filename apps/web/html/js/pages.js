@@ -645,7 +645,11 @@ async function renderManagers(ctx) {
   }
   if (!ctx.isCurrent()) return { skip: true };
   const items = Array.isArray(data?.items) ? data.items : [];
-  const stages = managerStageColumns(items);
+  const filters = await loadFilters(ctx.route.projectId);
+  if (!ctx.isCurrent()) return { skip: true };
+  const stages = !filters.missing && Array.isArray(filters.data?.stages) && filters.data.stages.length
+    ? stageColumns(filters.data.stages)
+    : managerStageColumns(items);
   const needle = query.q.trim().toLowerCase();
   const rows = items
     .map((manager) => {
@@ -658,6 +662,7 @@ async function renderManagers(ctx) {
       return `<tr data-href="${esc(href)}" data-name="${esc(manager.name || '')}">
         <td><a class="row-link" href="${esc(href)}">${esc(manager.name || '')}</a>${inactive}</td>
         <td>${esc(manager.calls_count ?? 0)}</td>
+        <td>${lastCallCell(manager.last_call_at, ctx.timeZone)}</td>
         ${stages.map((stage) => `<td class="score-cell">${scoreHtml(stageScoreOf(manager, stage.key))}</td>`).join('')}
         <td class="score-cell">${scoreHtml(manager.overall_score)}</td>
       </tr>`;
@@ -678,6 +683,7 @@ async function renderManagers(ctx) {
         <thead><tr>
           ${sortButton('Менеджер', 'name', query)}
           ${sortButton('Звонков', 'calls_count', query)}
+          <th>Последний звонок</th>
           ${stages.map((stage) => sortButton(stage.title, `stage.${stage.key}`, query)).join('')}
           ${sortButton('Средний итог', 'overall', query)}
         </tr></thead>
@@ -1066,6 +1072,11 @@ function sortButton(label, key, query) {
   const active = query.sort === key;
   const arrow = active ? (query.order === 'asc' ? '↑' : '↓') : '';
   return `<th><button type="button" class="sort${active ? ' is-active' : ''}" data-sort="${esc(key)}">${esc(label)} <span class="arrow">${arrow}</span></button></th>`;
+}
+
+function lastCallCell(value, timeZone) {
+  if (!value) return '<span class="muted">—</span>';
+  return esc(formatDateTime(value, timeZone));
 }
 
 function managerStageColumns(items) {

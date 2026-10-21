@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import type { AuthAccount } from '../auth/auth.guard';
 import { ProjectAccess, type ProjectRecord } from '../access';
 import { Database, isUniqueViolation, type Queryable } from '../db/database';
@@ -7,7 +8,8 @@ import { ApiError } from '../errors';
 import { isUuid } from '../ids';
 import { audioFetchMessage, AudioQueue } from '../queue/audio-queue';
 import { Recordings } from '../storage/recordings';
-import { audioObject } from './audio-ext';
+import { audioObject, recordingContentType } from './audio-ext';
+import { loadCurrentStages } from '../projects/scorecard';
 import { durationBelowMinimum } from './duration';
 import { parseListQuery, requestedAction } from './list-query';
 import { presentCall, presentListItem, type CallRow } from './present-call';
@@ -173,6 +175,45 @@ export class CallsService {
       throw new ApiError(404, { error: 'call_not_found' });
     }
     return presentCall(row);
+  }
+
+  async openRecording(
+    account: AuthAccount,
+    projectId: string,
+    callId: string,
+  ): Promise<{ stream: Readable; contentType: string; contentLength?: number }> {
+    const project = await this.access.require(account, projectId, 'read');
+    if (!isUuid(callId)) {
+      throw new ApiError(404, { error: 'call_not_found' });
+    }
+    const result = await this.db.query<{
+      recording_storage_key: string | null;
+      recording_content_type: string | null;
+    }>(
+      `select recording_storage_key, recording_content_type
+       from calls
+       where project_id = $1 and id = $2`,
+      [project.id, callId],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new ApiError(404, { error: 'call_not_found' });
+    }
+    if (!row.recording_storage_key) {
+      throw new ApiError(404, { error: 'recording_missing' });
+    }
+    const opened = await this.recordings.open(row.recording_storage_key);
+    if (!opened) {
+      throw new ApiError(404, { error: 'recording_missing' });
+    }
+    const file: { stream: Readable; contentType: string; contentLength?: number } = {
+      stream: opened.stream,
+      contentType: recordingContentType(row.recording_content_type),
+    };
+    if (opened.contentLength !== undefined) {
+      file.contentLength = opened.contentLength;
+    }
+    return file;
   }
 
   async create(account: AuthAccount, projectId: string, input: CreateCallInput): Promise<IntakeResult> {
@@ -471,17 +512,8 @@ export class CallsService {
   }
 
   private async stageKeys(projectId: string): Promise<string[]> {
-    const result = await this.db.query<{ stages_json: unknown }>(
-      `select stages_json from scorecards where project_id = $1 order by version desc limit 1`,
-      [projectId],
-    );
-    const stages = result.rows[0]?.stages_json;
-    if (!Array.isArray(stages)) {
-      return [];
-    }
-    return stages
-      .map((stage) => (isRecord(stage) && typeof stage.key === 'string' ? stage.key : undefined))
-      .filter((key): key is string => key !== undefined);
+    const stages = await loadCurrentStages(this.db, projectId);
+    return stages.map((stage) => stage.key);
   }
 }
 
