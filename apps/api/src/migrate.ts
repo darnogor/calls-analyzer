@@ -8,8 +8,22 @@ async function main(): Promise<void> {
     throw new Error('Missing DATABASE_URL');
   }
   const dir = process.env.MIGRATIONS_DIR || join(__dirname, '../../../migrations');
-  const pool = new Pool({ connectionString: databaseUrl });
-  const client = await pool.connect();
+  const pool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 2000 });
+  let client;
+  for (let attempt = 1; attempt <= 20; attempt += 1) {
+    try {
+      client = await pool.connect();
+      break;
+    } catch (error) {
+      if (attempt === 20) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  if (!client) {
+    throw new Error('postgres is not reachable');
+  }
   try {
     await client.query(`
       create table if not exists schema_migrations (

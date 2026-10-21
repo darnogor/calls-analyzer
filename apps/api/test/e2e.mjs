@@ -7,15 +7,30 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const base = process.env.BASE_URL ?? 'https://127.0.0.1';
 
+function dockerPrefix() {
+  try {
+    execFileSync('docker', ['info'], { stdio: 'ignore' });
+    return ['docker'];
+  } catch {
+    return ['sudo', 'docker'];
+  }
+}
+
+const dockerCommand = dockerPrefix();
+
 function docker(args, input) {
   try {
-    return execFileSync('docker', args, { encoding: 'utf8', input });
+    return execFileSync(dockerCommand[0], [...dockerCommand.slice(1), ...args], {
+      encoding: 'utf8',
+      input,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
   } catch (error) {
-    const message = `${error.stderr ?? ''}${error.message ?? ''}`;
-    if (!/permission denied|connect:/.test(message) && error.code !== 'EACCES') {
-      throw error;
+    const stderr = error.stderr?.toString?.() ?? '';
+    if (stderr) {
+      process.stderr.write(stderr);
     }
-    return execFileSync('sudo', ['docker', ...args], { encoding: 'utf8', input });
+    throw error;
   }
 }
 
@@ -370,12 +385,14 @@ assert.deepEqual(malformed.body, { error: 'invalid_payload' });
 
 const leadId = randomUUID();
 const salesId = randomUUID();
+const leadEmail = `lead-${leadId.slice(0, 8)}@example.com`;
+const salesEmail = `sales-${salesId.slice(0, 8)}@example.com`;
 const leadHash = bcrypt.hashSync('lead-password', 4);
 const salesHash = bcrypt.hashSync('sales-password', 4);
 psql(
   `insert into accounts (id, email, name, password_hash, is_administrator, is_active)
-   values (${quote(leadId)}, 'lead@example.com', 'Руководитель', ${quote(leadHash)}, false, true),
-          (${quote(salesId)}, 'sales@example.com', 'Менеджер', ${quote(salesHash)}, false, true)`,
+   values (${quote(leadId)}, ${quote(leadEmail)}, 'Руководитель', ${quote(leadHash)}, false, true),
+          (${quote(salesId)}, ${quote(salesEmail)}, 'Менеджер', ${quote(salesHash)}, false, true)`,
 );
 psql(
   `insert into project_memberships (id, account_id, project_id, role)
@@ -388,7 +405,7 @@ assert.equal(other.status, 201);
 
 const leadLogin = await api('/api/session', {
   method: 'POST',
-  json: { email: 'lead@example.com', password: 'lead-password' },
+  json: { email: leadEmail, password: 'lead-password' },
 });
 const lead = sessionCookie(leadLogin.setCookie);
 const leadMe = await api('/api/me', { cookie: lead });
@@ -399,7 +416,7 @@ assert.equal((await api(`/api/projects/${other.body.id}/calls`, { cookie: lead }
 
 const salesLogin = await api('/api/session', {
   method: 'POST',
-  json: { email: 'sales@example.com', password: 'sales-password' },
+  json: { email: salesEmail, password: 'sales-password' },
 });
 const sales = sessionCookie(salesLogin.setCookie);
 assert.equal(
