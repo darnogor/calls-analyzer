@@ -87,7 +87,7 @@ POST /plugins/amocrm/webhooks/{connection_id}
 
 ### Настройки связки
 
-Перед отправкой в ядро плагин читает порог проекта. Свои интервалы он хранит в `connections`:
+Перед отправкой в ядро плагин читает `GET /api/projects/{project_id}/min-call-duration` со своим `source_token`. В ответе только порог. Свои интервалы он хранит в `connections`:
 
 | Поле | Стартовое значение |
 | --- | --- |

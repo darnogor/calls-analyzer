@@ -109,6 +109,25 @@ PUT /api/projects/{project_id}/settings
 
 В `stages` ровно пять ключей: `opening`, `needs`, `presentation`, `objections`, `closing`. Другой набор — `422` `{ "error": "stage_set_is_fixed" }`. Меняются `title`, `weight` и `instruction`. Сумма `weight` равна 1. `min_call_duration_sec` — целое больше нуля. Успешное сохранение увеличивает `scorecards.version`. Готовые `call_analysis` сервис не переписывает.
 
+### Порог для плагина
+
+Плагин читает порог до отправки звонка. Сессию человека этот вызов не спрашивает.
+
+```http
+GET /api/projects/{project_id}/min-call-duration
+Authorization: Bearer {source_token}
+```
+
+Ответ `200`:
+
+```json
+{ "min_call_duration_sec": 180 }
+```
+
+В ответе только это поле. Пояс, этапы и остальные настройки не отдаются. Запись настроек этим токеном недоступна: `PUT .../settings` по-прежнему только у администратора. Токен другого проекта — `403` `{ "error": "source_project_mismatch" }`.
+
+Плагин сравнивает известную длительность с этим числом и не шлёт заведомо короткие звонки. Если такой звонок всё же пришёл и `duration_sec` уже известен и ниже порога, ответ прежний: `422` `{ "error": "duration_below_minimum" }`, строки нет.
+
 ### Источники
 
 `GET` и `POST` — администратор или руководитель. Обмен кода вызывает плагин, без сессии человека.
