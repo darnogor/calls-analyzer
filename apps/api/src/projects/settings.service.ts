@@ -1,17 +1,29 @@
 import { Injectable } from '@nestjs/common';
 import type { AuthAccount } from '../auth/auth.guard';
+import type { PluginSource } from '../auth/source-tokens';
+import { SourceTokens } from '../auth/source-tokens';
 import { ProjectAccess } from '../access';
 import { Database, isUniqueViolation } from '../db/database';
 import { ApiError } from '../errors';
 import { loadCurrentStages } from './scorecard';
 import { parseSettings, type SettingsBody } from './validate-settings';
 
+export function presentMinCallDuration(minCallDurationSec: number): { min_call_duration_sec: number } {
+  return { min_call_duration_sec: minCallDurationSec };
+}
+
 @Injectable()
 export class SettingsService {
   constructor(
     private readonly db: Database,
     private readonly access: ProjectAccess,
+    private readonly sourceTokens: SourceTokens,
   ) {}
+
+  async minCallDuration(source: PluginSource, projectId: string): Promise<{ min_call_duration_sec: number }> {
+    const project = await this.sourceTokens.requireProject(source, projectId);
+    return presentMinCallDuration(project.min_call_duration_sec);
+  }
 
   async get(account: AuthAccount, projectId: string): Promise<SettingsBody> {
     const project = await this.access.require(account, projectId, 'settings');

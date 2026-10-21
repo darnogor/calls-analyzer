@@ -3,11 +3,16 @@ import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { ApiError } from '../errors';
 import { Database } from '../db/database';
+import { type AuthMode as AuthModeName, chooseAuth } from './bearer';
 import { readCookie } from './session-token';
 import { SessionTokens } from './session-tokens';
+import { SourceTokens, type PluginSource } from './source-tokens';
 
 export const IS_PUBLIC = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC, true);
+
+export const AUTH_MODE = 'authMode';
+export const AuthMode = (mode: AuthModeName) => SetMetadata(AUTH_MODE, mode);
 
 export type AuthAccount = {
   id: string;
@@ -16,13 +21,14 @@ export type AuthAccount = {
   is_administrator: boolean;
 };
 
-export type AuthedRequest = Request & { account: AuthAccount };
+export type AuthedRequest = Request & { account: AuthAccount; source?: PluginSource };
 
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly tokens: SessionTokens,
+    private readonly sources: SourceTokens,
     private readonly db: Database,
   ) {}
 
@@ -31,10 +37,19 @@ export class AuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (isPublic) {
+    const mode = this.reflector.getAllAndOverride<AuthModeName>(AUTH_MODE, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    const request = context.switchToHttp().getRequest<AuthedRequest>();
+    const choice = chooseAuth(Boolean(isPublic), mode, request.headers.authorization);
+    if (choice === 'public') {
       return true;
     }
-    const request = context.switchToHttp().getRequest<AuthedRequest>();
+    if (choice === 'source') {
+      request.source = await this.sources.authenticate(request.headers.authorization);
+      return true;
+    }
     const token = readCookie(request.headers.cookie, 'session');
     const accountId = token ? this.tokens.verify(token) : null;
     if (!accountId) {

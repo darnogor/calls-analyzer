@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import type { AuthAccount } from '../auth/auth.guard';
+import type { PluginSource } from '../auth/source-tokens';
+import { SourceTokens } from '../auth/source-tokens';
 import { ProjectAccess, type ProjectRecord } from '../access';
 import { Database, isUniqueViolation, type Queryable } from '../db/database';
 import { ApiError } from '../errors';
@@ -12,6 +14,15 @@ import { audioObject, recordingContentType } from './audio-ext';
 import { loadCurrentStages } from '../projects/scorecard';
 import { durationBelowMinimum } from './duration';
 import { parseListQuery, requestedAction } from './list-query';
+import {
+  parseRecordingBody,
+  pluginIntakeError,
+  recordingAttachOutcome,
+  recordingMissingOutcome,
+  resolveExistingCall,
+  type RecordingAttachOutcome,
+  withoutPluginManagerId,
+} from './plugin-rules';
 import { presentCall, presentListItem, type CallRow } from './present-call';
 import { foldedColumn, likeContains } from './search';
 import { validateIntake, type Intake } from './validate-intake';
@@ -29,6 +40,11 @@ export type CreateCallInput = {
   file?: UploadedPart;
   payloadFile?: UploadedPart;
   idempotencyKey?: string | string[];
+};
+
+export type IntakeActor = {
+  account?: AuthAccount;
+  source?: PluginSource;
 };
 
 type IntakeResult = {
@@ -81,6 +97,7 @@ export class CallsService {
   constructor(
     private readonly db: Database,
     private readonly access: ProjectAccess,
+    private readonly sourceTokens: SourceTokens,
     private readonly queue: AudioQueue,
     private readonly recordings: Recordings,
   ) {}
@@ -216,8 +233,12 @@ export class CallsService {
     return file;
   }
 
-  async create(account: AuthAccount, projectId: string, input: CreateCallInput): Promise<IntakeResult> {
-    const project = await this.access.require(account, projectId, 'write');
+  async create(actor: IntakeActor, projectId: string, input: CreateCallInput): Promise<IntakeResult> {
+    const plugin = Boolean(actor.source);
+    const project = plugin
+      ? await this.sourceTokens.requireProject(actor.source as PluginSource, projectId)
+      : await this.requireAccountProject(actor, projectId);
+    const sourceId = plugin ? (actor.source as PluginSource).id : await this.manualSource(project.id);
     const submitted = readSubmittedBody(input);
     const validated = validateIntake(submitted.raw);
     if (!validated.ok) {
@@ -229,16 +250,189 @@ export class CallsService {
     if (submitted.file && submitted.file.size === 0) {
       throw new ApiError(422, { error: 'invalid_payload' });
     }
+    let intake = validated.value;
+    if (plugin) {
+      const pluginError = pluginIntakeError(intake);
+      if (pluginError) {
+        throw new ApiError(422, pluginError);
+      }
+      intake = withoutPluginManagerId(intake);
+    }
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
-    const sourceId = await this.manualSource(project.id);
     try {
-      return await this.insertOrReplay(project, sourceId, validated.value, submitted.file, idempotencyKey);
+      return await this.insertOrReplay(project, sourceId, intake, submitted.file, idempotencyKey);
     } catch (error) {
       if (!isUniqueViolation(error)) {
         throw error;
       }
-      return this.insertOrReplay(project, sourceId, validated.value, submitted.file, idempotencyKey);
+      return this.insertOrReplay(project, sourceId, intake, submitted.file, idempotencyKey);
     }
+  }
+
+  async attachRecording(
+    source: PluginSource,
+    projectId: string,
+    externalId: string,
+    input: CreateCallInput,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const project = await this.sourceTokens.requireProject(source, projectId);
+    const key = externalId.trim();
+    if (!key) {
+      throw new ApiError(404, { error: 'call_not_found' });
+    }
+    const submitted = readRecordingSubmission(input);
+    const preview = await this.db.query<{
+      id: string;
+      processing_status: string;
+      recording_storage_key: string | null;
+    }>(
+      `select id, processing_status, recording_storage_key
+       from calls
+       where project_id = $1 and source_id = $2 and external_id = $3`,
+      [project.id, source.id, key],
+    );
+    const call = preview.rows[0];
+    if (!call) {
+      throw new ApiError(404, { error: 'call_not_found' });
+    }
+    const first = recordingAttachOutcome(call);
+    if (!first.enqueue) {
+      return recordingOutcomeBody(call.id, first);
+    }
+
+    let uploadedKey: string | null = null;
+    let contentType: string | null = null;
+    if (submitted.file) {
+      const audio = audioObject(submitted.file);
+      uploadedKey = `projects/${project.id}/calls/${call.id}.${randomUUID()}.${audio.ext}`;
+      contentType = audio.contentType;
+      await this.recordings.put(uploadedKey, submitted.file.buffer, contentType);
+    }
+
+    let keptUpload = false;
+    try {
+      const result = await this.db.tx(async (client) => {
+        const locked = await client.query<{
+          id: string;
+          processing_status: string;
+          recording_storage_key: string | null;
+        }>(
+          `select id, processing_status, recording_storage_key
+           from calls
+           where id = $1
+           for update`,
+          [call.id],
+        );
+        const row = locked.rows[0];
+        if (!row) {
+          throw new ApiError(404, { error: 'call_not_found' });
+        }
+        const decision = recordingAttachOutcome(row);
+        if (!decision.enqueue) {
+          return {
+            id: row.id,
+            outcome: decision,
+            removeUploaded: Boolean(uploadedKey),
+            removeOld: null as string | null,
+          };
+        }
+        if (submitted.file && uploadedKey && contentType) {
+          await client.query(
+            `update calls
+             set processing_status = 'audio_queued',
+                 recording_storage_key = $2,
+                 recording_content_type = $3,
+                 recording_source_url = null,
+                 error = null,
+                 updated_at = now()
+             where id = $1`,
+            [row.id, uploadedKey, contentType],
+          );
+          await this.queue.enqueue(
+            audioFetchMessage(project.id, row.id, {
+              type: 'object',
+              bucket: this.recordings.bucket,
+              key: uploadedKey,
+              content_type: contentType,
+            }),
+          );
+        } else if (submitted.url) {
+          await client.query(
+            `update calls
+             set processing_status = 'audio_queued',
+                 recording_source_url = $2,
+                 recording_storage_key = null,
+                 recording_content_type = null,
+                 error = null,
+                 updated_at = now()
+             where id = $1`,
+            [row.id, submitted.url],
+          );
+          await this.queue.enqueue(
+            audioFetchMessage(project.id, row.id, { type: 'url', url: submitted.url }),
+          );
+        } else {
+          throw new ApiError(422, { error: 'invalid_payload' });
+        }
+        const previousKey = row.recording_storage_key;
+        return {
+          id: row.id,
+          outcome: decision,
+          removeUploaded: false,
+          removeOld: previousKey && previousKey !== uploadedKey ? previousKey : null,
+        };
+      });
+      if (result.removeUploaded && uploadedKey) {
+        await this.recordings.remove(uploadedKey).catch((error) => console.error('remove object', error));
+      } else if (uploadedKey) {
+        keptUpload = true;
+      }
+      if (result.removeOld) {
+        await this.recordings.remove(result.removeOld).catch((error) => console.error('remove object', error));
+      }
+      return recordingOutcomeBody(result.id, result.outcome);
+    } catch (error) {
+      if (uploadedKey && !keptUpload) {
+        await this.recordings.remove(uploadedKey).catch((removeError) => console.error('remove object', removeError));
+      }
+      throw error;
+    }
+  }
+
+  async markRecordingMissing(
+    source: PluginSource,
+    projectId: string,
+    externalId: string,
+  ): Promise<{ id: string; processing_status: 'recording_missing' }> {
+    const project = await this.sourceTokens.requireProject(source, projectId);
+    const key = externalId.trim();
+    if (!key) {
+      throw new ApiError(404, { error: 'call_not_found' });
+    }
+    return this.db.tx(async (client) => {
+      const locked = await client.query<{ id: string; processing_status: string }>(
+        `select id, processing_status
+         from calls
+         where project_id = $1 and source_id = $2 and external_id = $3
+         for update`,
+        [project.id, source.id, key],
+      );
+      const row = locked.rows[0];
+      if (!row) {
+        throw new ApiError(404, { error: 'call_not_found' });
+      }
+      const decision = recordingMissingOutcome(row.processing_status);
+      if (decision.http === 409) {
+        throw new ApiError(409, { error: decision.error });
+      }
+      await client.query(
+        `update calls
+         set processing_status = 'recording_missing', updated_at = now()
+         where id = $1`,
+        [row.id],
+      );
+      return { id: row.id, processing_status: 'recording_missing' };
+    });
   }
 
   private async insertOrReplay(
@@ -265,27 +459,34 @@ export class CallsService {
     idempotencyKey: string | undefined,
     externalId: string | undefined,
   ): Promise<{ id: string } | null> {
-    let byKey: string | undefined;
-    let byExternal: string | undefined;
+    let byKey: { id: string; source_id: string } | null = null;
+    let byExternal: { id: string } | null = null;
     if (idempotencyKey) {
-      const result = await this.db.query<{ id: string }>(
-        `select id from calls where project_id = $1 and idempotency_key = $2`,
+      const result = await this.db.query<{ id: string; source_id: string }>(
+        `select id, source_id from calls where project_id = $1 and idempotency_key = $2`,
         [projectId, idempotencyKey],
       );
-      byKey = result.rows[0]?.id;
+      byKey = result.rows[0] ?? null;
     }
     if (externalId) {
       const result = await this.db.query<{ id: string }>(
         `select id from calls where project_id = $1 and source_id = $2 and external_id = $3`,
         [projectId, sourceId, externalId],
       );
-      byExternal = result.rows[0]?.id;
+      byExternal = result.rows[0] ?? null;
     }
-    if (byKey && byExternal && byKey !== byExternal) {
+    const resolved = resolveExistingCall(sourceId, byKey, byExternal);
+    if (!resolved.ok) {
       throw new ApiError(422, { error: 'invalid_payload' });
     }
-    const id = byKey ?? byExternal;
-    return id ? { id } : null;
+    return resolved.id ? { id: resolved.id } : null;
+  }
+
+  private async requireAccountProject(actor: IntakeActor, projectId: string): Promise<ProjectRecord> {
+    if (!actor.account) {
+      throw new ApiError(401, { error: 'unauthenticated' });
+    }
+    return this.access.require(actor.account, projectId, 'write');
   }
 
   private async insertNew(
@@ -621,6 +822,38 @@ function storedDeal(deal: Intake['deal']): {
     external_url: deal.external_url ?? null,
     link_status: deal.link_status,
   };
+}
+
+function recordingOutcomeBody(
+  id: string,
+  outcome: RecordingAttachOutcome,
+): { status: number; body: Record<string, unknown> } {
+  if (outcome.http === 409) {
+    return { status: 409, body: { error: outcome.error } };
+  }
+  return {
+    status: outcome.http,
+    body: { id, processing_status: outcome.processing_status },
+  };
+}
+
+function readRecordingSubmission(input: CreateCallInput): { file?: UploadedPart; url?: string } {
+  const header = Array.isArray(input.contentType) ? input.contentType[0] : input.contentType;
+  const contentType = header ?? '';
+  if (contentType.includes('multipart/form-data')) {
+    if (!input.file || input.file.size === 0) {
+      throw new ApiError(422, { error: 'invalid_payload' });
+    }
+    return { file: input.file };
+  }
+  if (contentType.includes('application/json')) {
+    const recording = parseRecordingBody(input.body);
+    if (!recording) {
+      throw new ApiError(422, { error: 'invalid_payload' });
+    }
+    return { url: recording.url };
+  }
+  throw new ApiError(422, { error: 'invalid_payload' });
 }
 
 function readSubmittedBody(input: CreateCallInput): { raw: unknown; file?: UploadedPart } {

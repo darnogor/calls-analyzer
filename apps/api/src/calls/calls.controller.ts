@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   Post,
   Query,
@@ -11,8 +12,9 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import type { Response } from 'express';
-import type { AuthedRequest } from '../auth/auth.guard';
+import type { Request, Response } from 'express';
+import { AuthMode, type AuthedRequest } from '../auth/auth.guard';
+import { sourceFrom } from '../auth/source-tokens';
 import { CallsService, type UploadedPart } from './calls.service';
 
 const UPLOAD_LIMIT_BYTES = 512 * 1024 * 1024;
@@ -28,6 +30,38 @@ export class CallsController {
     @Query() query: Record<string, unknown>,
   ) {
     return this.calls.list(req.account, projectId, query);
+  }
+
+  @Post('by-external-id/:externalId/recording/missing')
+  @AuthMode('source')
+  @HttpCode(200)
+  markRecordingMissing(
+    @Req() req: Request,
+    @Param('projectId') projectId: string,
+    @Param('externalId') externalId: string,
+  ) {
+    return this.calls.markRecordingMissing(sourceFrom(req), projectId, externalId);
+  }
+
+  @Post('by-external-id/:externalId/recording')
+  @AuthMode('source')
+  @UseInterceptors(
+    FileFieldsInterceptor([{ name: 'file', maxCount: 1 }], { limits: { fileSize: UPLOAD_LIMIT_BYTES } }),
+  )
+  async attachRecording(
+    @Req() req: Request,
+    @Param('projectId') projectId: string,
+    @Param('externalId') externalId: string,
+    @UploadedFiles() files: { file?: UploadedPart[] } | undefined,
+    @Body() body: unknown,
+    @Res() res: Response,
+  ): Promise<void> {
+    const result = await this.calls.attachRecording(sourceFrom(req), projectId, externalId, {
+      contentType: req.headers['content-type'],
+      body,
+      file: files?.file?.[0],
+    });
+    res.status(result.status).json(result.body);
   }
 
   @Get(':callId/recording')
@@ -59,6 +93,7 @@ export class CallsController {
   }
 
   @Post()
+  @AuthMode('session_or_source')
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -75,7 +110,7 @@ export class CallsController {
     @Body() body: unknown,
     @Res() res: Response,
   ): Promise<void> {
-    const result = await this.calls.create(req.account, projectId, {
+    const result = await this.calls.create({ account: req.account, source: req.source }, projectId, {
       contentType: req.headers['content-type'],
       body,
       file: files?.file?.[0],
