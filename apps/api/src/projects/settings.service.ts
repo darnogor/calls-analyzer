@@ -25,7 +25,7 @@ export class SettingsService {
 
   async replace(account: AuthAccount, projectId: string, body: unknown): Promise<SettingsBody> {
     const project = await this.access.require(account, projectId, 'settings');
-    const parsed = parseSettings(body);
+    const parsed = await parseSettings(body, this.db);
     if (!parsed.ok) {
       if (parsed.error === 'stage_set_is_fixed') {
         throw new ApiError(422, { error: 'stage_set_is_fixed' });

@@ -40,13 +40,26 @@ describe('project roles', () => {
   });
 });
 
+const PG_TIME_ZONES = ['Europe/Moscow', 'Europe/Kyiv', 'America/New_York', 'UTC'];
+
+function pgTimeZones(names: readonly string[] = PG_TIME_ZONES) {
+  return {
+    async query(text: string, params?: unknown[]) {
+      assert.match(text, /from pg_timezone_names/);
+      const requested = String(params?.[0] ?? '');
+      const canonical = names.find((name) => name.toLowerCase() === requested.toLowerCase());
+      return { rows: canonical ? [{ name: canonical }] : [] };
+    },
+  };
+}
+
 describe('analysis settings', () => {
-  it('accepts the five default stages and rejects another set', () => {
-    const parsed = parseSettings({
+  it('accepts the five default stages and rejects another set', async () => {
+    const parsed = await parseSettings({
       timezone: 'Europe/Moscow',
       min_call_duration_sec: 180,
       stages: DEFAULT_STAGES,
-    });
+    }, pgTimeZones());
     assert.equal(parsed.ok, true);
     if (!parsed.ok) return;
     assert.deepEqual(parsed.value.stages.map((stage) => stage.key), [
@@ -56,35 +69,65 @@ describe('analysis settings', () => {
       'objections',
       'closing',
     ]);
-    assert.equal(parseSettings({ timezone: 'Europe/Moscow', min_call_duration_sec: 180, stages: STAGES.slice(0, 4) }).ok, false);
-    const wrong = parseSettings({
+    assert.equal((await parseSettings({ timezone: 'Europe/Moscow', min_call_duration_sec: 180, stages: STAGES.slice(0, 4) }, pgTimeZones())).ok, false);
+    const wrong = await parseSettings({
       timezone: 'Europe/Moscow',
       min_call_duration_sec: 180,
       stages: STAGES.map((stage, index) => (index === 0 ? { ...stage, key: 'hello' } : stage)),
-    });
+    }, pgTimeZones());
     assert.equal(wrong.ok, false);
     if (wrong.ok) return;
     assert.equal(wrong.error, 'stage_set_is_fixed');
   });
 
-  it('reports a weight total that is not 1 and a bad timezone', () => {
-    const weights = parseSettings({
+  it('reports a weight total that is not 1 and a bad timezone', async () => {
+    const weights = await parseSettings({
       timezone: 'Europe/Moscow',
       min_call_duration_sec: 180,
       stages: STAGES.map((stage, index) => (index === 0 ? { ...stage, weight: 0.5 } : stage)),
-    });
+    }, pgTimeZones());
     assert.equal(weights.ok, false);
     if (weights.ok || weights.error !== 'invalid_settings') return;
     assert.deepEqual(weights.details, ['weights_sum_must_be_1']);
 
-    const zone = parseSettings({
+    const zone = await parseSettings({
       timezone: 'Not/AZone',
       min_call_duration_sec: 0,
       stages: STAGES,
-    });
+    }, pgTimeZones());
     assert.equal(zone.ok, false);
     if (zone.ok || zone.error !== 'invalid_settings') return;
     assert.deepEqual(zone.details, ['timezone', 'min_call_duration_sec']);
+  });
+
+  it('accepts only timezones PostgreSQL lists in pg_timezone_names', async () => {
+    for (const timezone of ['US/Eastern', 'Europe/Kiev']) {
+      const parsed = await parseSettings({
+        timezone,
+        min_call_duration_sec: 180,
+        stages: STAGES,
+      }, pgTimeZones());
+      assert.equal(parsed.ok, false, timezone);
+      if (parsed.ok || parsed.error !== 'invalid_settings') continue;
+      assert.deepEqual(parsed.details, ['timezone']);
+    }
+    for (const timezone of PG_TIME_ZONES) {
+      const parsed = await parseSettings({
+        timezone,
+        min_call_duration_sec: 180,
+        stages: STAGES,
+      }, pgTimeZones());
+      assert.equal(parsed.ok, true, timezone);
+      if (!parsed.ok) continue;
+      assert.equal(parsed.value.timezone, timezone);
+    }
+    const canonical = await parseSettings({
+      timezone: 'utc',
+      min_call_duration_sec: 180,
+      stages: STAGES,
+    }, pgTimeZones());
+    assert.equal(canonical.ok, true);
+    if (canonical.ok) assert.equal(canonical.value.timezone, 'UTC');
   });
 });
 

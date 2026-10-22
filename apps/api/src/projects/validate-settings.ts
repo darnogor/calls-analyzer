@@ -13,7 +13,24 @@ export type SettingsParse =
 
 const WEIGHT_EPSILON = 1e-6;
 
-export function parseSettings(body: unknown): SettingsParse {
+export type TimeZoneDirectory = {
+  query(text: string, params?: unknown[]): Promise<{ rows: Array<{ name: string }> }>;
+};
+
+export async function pgTimeZoneName(timeZones: TimeZoneDirectory, timezone: string): Promise<string | null> {
+  const result = await timeZones.query(
+    `select name
+     from pg_timezone_names
+     where lower(name) = lower($1)
+     order by name = $1 desc
+     limit 1`,
+    [timezone],
+  );
+  const name = result.rows[0]?.name;
+  return typeof name === 'string' && name.length > 0 ? name : null;
+}
+
+export async function parseSettings(body: unknown, timeZones: TimeZoneDirectory): Promise<SettingsParse> {
   if (!isRecord(body)) {
     return { ok: false, error: 'invalid_settings', details: ['timezone', 'min_call_duration_sec', 'stages'] };
   }
@@ -21,8 +38,9 @@ export function parseSettings(body: unknown): SettingsParse {
     return { ok: false, error: 'stage_set_is_fixed' };
   }
   const details: string[] = [];
-  const timezone = typeof body.timezone === 'string' ? body.timezone.trim() : '';
-  if (!timezone || !isTimeZone(timezone)) {
+  const requested = typeof body.timezone === 'string' ? body.timezone.trim() : '';
+  const timezone = requested ? await pgTimeZoneName(timeZones, requested) : null;
+  if (!timezone) {
     details.push('timezone');
   }
   if (!isPositiveInt(body.min_call_duration_sec)) {
@@ -65,7 +83,7 @@ export function parseSettings(body: unknown): SettingsParse {
   return {
     ok: true,
     value: {
-      timezone,
+      timezone: timezone ?? '',
       min_call_duration_sec: body.min_call_duration_sec as number,
       stages,
     },
@@ -96,15 +114,6 @@ function weightsSumToOne(weights: number[]): boolean {
 
 function isPositiveInt(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
-}
-
-function isTimeZone(value: string): boolean {
-  try {
-    Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
