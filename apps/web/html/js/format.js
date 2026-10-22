@@ -232,13 +232,14 @@ export function zonedIso(dateTimeLocal, timeZone) {
   return `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00${sign}${hours}:${minutes}`;
 }
 
-export function readCallsQuery(search, timeZone) {
+export function readCallsQuery(search, timeZone, screen = 'calls') {
   const params = asParams(search);
   const periodAll = params.get('period') === 'all';
   let dateFrom = params.get('date_from') || '';
   let dateTo = params.get('date_to') || '';
   let appliedDefault = false;
-  if (!periodAll && !params.has('date_from') && !params.has('date_to')) {
+  const defaultToday = screen !== 'progress' && screen !== 'problems';
+  if (defaultToday && !periodAll && !params.has('date_from') && !params.has('date_to')) {
     const today = todayInTimeZone(timeZone);
     dateFrom = today;
     dateTo = today;
