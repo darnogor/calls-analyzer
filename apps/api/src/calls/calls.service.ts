@@ -309,9 +309,15 @@ export class CallsService {
       await this.recordings.put(uploadedKey, submitted.file.buffer, contentType);
     }
 
-    let keptUpload = false;
+    let result: {
+      id: string;
+      outcome: RecordingAttachOutcome;
+      removeUploaded: boolean;
+      removeOld: string | null;
+      fetchAudio: AudioFetchMessage['audio'] | null;
+    };
     try {
-      const result = await this.db.tx(async (client) => {
+      result = await this.db.tx(async (client) => {
         const locked = await client.query<{
           id: string;
           processing_status: string;
@@ -333,9 +339,11 @@ export class CallsService {
             id: row.id,
             outcome: decision,
             removeUploaded: Boolean(uploadedKey),
-            removeOld: null as string | null,
+            removeOld: null,
+            fetchAudio: null,
           };
         }
+        let fetchAudio: AudioFetchMessage['audio'] | null = null;
         if (submitted.file && uploadedKey && contentType) {
           await client.query(
             `update calls
@@ -348,14 +356,12 @@ export class CallsService {
              where id = $1`,
             [row.id, uploadedKey, contentType],
           );
-          await this.queue.enqueue(
-            audioFetchMessage(project.id, row.id, {
-              type: 'object',
-              bucket: this.recordings.bucket,
-              key: uploadedKey,
-              content_type: contentType,
-            }),
-          );
+          fetchAudio = {
+            type: 'object',
+            bucket: this.recordings.bucket,
+            key: uploadedKey,
+            content_type: contentType,
+          };
         } else if (submitted.url) {
           await client.query(
             `update calls
@@ -368,9 +374,7 @@ export class CallsService {
              where id = $1`,
             [row.id, submitted.url],
           );
-          await this.queue.enqueue(
-            audioFetchMessage(project.id, row.id, { type: 'url', url: submitted.url }),
-          );
+          fetchAudio = { type: 'url', url: submitted.url };
         } else {
           throw new ApiError(422, { error: 'invalid_payload' });
         }
@@ -380,23 +384,25 @@ export class CallsService {
           outcome: decision,
           removeUploaded: false,
           removeOld: previousKey && previousKey !== uploadedKey ? previousKey : null,
+          fetchAudio,
         };
       });
-      if (result.removeUploaded && uploadedKey) {
-        await this.recordings.remove(uploadedKey).catch((error) => console.error('remove object', error));
-      } else if (uploadedKey) {
-        keptUpload = true;
-      }
-      if (result.removeOld) {
-        await this.recordings.remove(result.removeOld).catch((error) => console.error('remove object', error));
-      }
-      return recordingOutcomeBody(result.id, result.outcome);
     } catch (error) {
-      if (uploadedKey && !keptUpload) {
+      if (uploadedKey) {
         await this.recordings.remove(uploadedKey).catch((removeError) => console.error('remove object', removeError));
       }
       throw error;
     }
+    if (result.removeUploaded && uploadedKey) {
+      await this.recordings.remove(uploadedKey).catch((error) => console.error('remove object', error));
+    }
+    if (result.removeOld) {
+      await this.recordings.remove(result.removeOld).catch((error) => console.error('remove object', error));
+    }
+    if (result.fetchAudio) {
+      await this.queue.enqueue(audioFetchMessage(project.id, result.id, result.fetchAudio));
+    }
+    return recordingOutcomeBody(result.id, result.outcome);
   }
 
   async markRecordingMissing(
