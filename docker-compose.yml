@@ -1,0 +1,172 @@
+name: calls-analyzer
+
+x-api-build: &api-build
+  context: .
+  dockerfile: ops/service.Dockerfile
+  args:
+    SERVICE: api
+
+x-node-health: &node-health
+  test:
+    - CMD
+    - node
+    - -e
+    - fetch('http://127.0.0.1:3000/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+  interval: 5s
+  timeout: 5s
+  retries: 20
+  start_period: 10s
+
+services:
+  ingress:
+    build: ops/ingress
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >-
+          curl -fsS -k -o /dev/null https://127.0.0.1/health
+          && test "$(curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1/api/me)" = "401"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  web:
+    build: apps/web
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: *api-build
+    environment:
+      DATABASE_URL: postgresql://calls:calls@postgres:5432/calls
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio-secret
+      S3_BUCKET: recordings
+      SESSION_SECRET: dev-session-secret-change-me
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: admin-password
+      ADMIN_NAME: Администратор
+      PORT: "3000"
+      MIGRATIONS_DIR: /app/migrations
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    expose:
+      - "3000"
+    healthcheck: *node-health
+    restart: unless-stopped
+
+  migrate:
+    build: *api-build
+    command: ["node", "apps/api/dist/migrate.js"]
+    environment:
+      DATABASE_URL: postgresql://calls:calls@postgres:5432/calls
+      MIGRATIONS_DIR: /app/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  media:
+    build:
+      context: .
+      dockerfile: ops/service.Dockerfile
+      args:
+        SERVICE: media
+    environment:
+      PORT: "3000"
+    expose:
+      - "3000"
+    healthcheck: *node-health
+    restart: unless-stopped
+
+  transcriber:
+    build:
+      context: .
+      dockerfile: ops/service.Dockerfile
+      args:
+        SERVICE: transcriber
+    environment:
+      PORT: "3000"
+    expose:
+      - "3000"
+    healthcheck: *node-health
+    restart: unless-stopped
+
+  analyzer:
+    build:
+      context: .
+      dockerfile: ops/service.Dockerfile
+      args:
+        SERVICE: analyzer
+    environment:
+      PORT: "3000"
+    expose:
+      - "3000"
+    healthcheck: *node-health
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: calls
+      POSTGRES_PASSWORD: calls
+      POSTGRES_DB: calls
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calls -d calls"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    # Official minio/minio is no longer published on Docker Hub.
+    # This tag is the same MinIO server build, pinned from a public mirror.
+    image: ifirestone/minio:RELEASE.2026-09-22T19-25-18Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio-secret
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  pgdata:
+  miniodata:

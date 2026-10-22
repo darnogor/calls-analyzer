@@ -1,0 +1,17 @@
+{
+  "name": "calls-analyzer",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/media",
+    "apps/transcriber",
+    "apps/analyzer"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test -w @calls/api"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
