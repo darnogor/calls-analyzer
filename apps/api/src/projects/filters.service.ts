@@ -18,12 +18,10 @@ export class FiltersService {
   }> {
     const project = await this.access.require(account, projectId, 'read');
     const [managers, deals, stages] = await Promise.all([
-      this.db.query<{ id: string; name: string }>(
-        `select id, name
-         from managers
-         where project_id = $1 and is_active = true`,
-        [project.id],
-      ),
+      this.db.client.manager.findMany({
+        where: { project_id: project.id, is_active: true },
+        select: { id: true, name: true },
+      }),
       this.db.query<{ status: string }>(
         `select distinct btrim(current_deal_status_name) as status
          from calls
@@ -32,10 +30,10 @@ export class FiltersService {
            and btrim(current_deal_status_name) <> ''`,
         [project.id],
       ),
-      loadCurrentStages(this.db, project.id),
+      loadCurrentStages(this.db.client, project.id),
     ]);
     return {
-      managers: [...managers.rows]
+      managers: [...managers]
         .sort((left, right) => left.name.localeCompare(right.name, 'ru') || left.id.localeCompare(right.id))
         .map((row) => ({ id: row.id, name: row.name })),
       deal_statuses: deals.rows.map((row) => row.status).sort((left, right) => left.localeCompare(right, 'ru')),

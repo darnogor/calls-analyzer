@@ -45,7 +45,7 @@ export class ManagersService {
 
   async list(account: AuthAccount, projectId: string, query: Record<string, unknown>) {
     const project = await this.access.require(account, projectId, 'read');
-    const stages = await loadCurrentStages(this.db, project.id);
+    const stages = await loadCurrentStages(this.db.client, project.id);
     const parsed = parseManagerQuery(query, stages.map((stage) => stage.key));
     const rows = await this.loadRows(project.id, parsed.dateFrom ?? null, parsed.dateTo ?? null, null);
     const items = sortManagers(
@@ -62,7 +62,7 @@ export class ManagersService {
 
   async get(account: AuthAccount, projectId: string, managerId: string, query: Record<string, unknown>) {
     const project = await this.access.require(account, projectId, 'read');
-    const stages = await loadCurrentStages(this.db, project.id);
+    const stages = await loadCurrentStages(this.db.client, project.id);
     const parsed = parseManagerQuery(query, stages.map((stage) => stage.key));
     const item = await this.one(project.id, managerId, stages, parsed.dateFrom ?? null, parsed.dateTo ?? null);
     return item;
@@ -78,11 +78,11 @@ export class ManagersService {
     if (!isUuid(managerId)) {
       throw new ApiError(404, { error: 'manager_not_found' });
     }
-    const found = await this.db.query(
-      `select id from managers where id = $1 and project_id = $2`,
-      [managerId, project.id],
-    );
-    if (!found.rowCount) {
+    const found = await this.db.client.manager.findFirst({
+      where: { id: managerId, project_id: project.id },
+      select: { id: true },
+    });
+    if (!found) {
       throw new ApiError(404, { error: 'manager_not_found' });
     }
     return this.calls.list(account, projectId, { ...query, manager_id: managerId });
@@ -97,25 +97,21 @@ export class ManagersService {
     if (!isUuid(managerId)) {
       throw new ApiError(404, { error: 'manager_not_found' });
     }
-    const current = await this.db.query<{ source_kind: string }>(
-      `select s.kind as source_kind
-       from managers m
-       join sources s on s.id = m.source_id
-       where m.id = $1 and m.project_id = $2`,
-      [managerId, project.id],
-    );
-    const row = current.rows[0];
-    if (!row) {
+    const current = await this.db.client.manager.findFirst({
+      where: { id: managerId, project_id: project.id },
+      select: { source: { select: { kind: true } } },
+    });
+    if (!current) {
       throw new ApiError(404, { error: 'manager_not_found' });
     }
-    if (row.source_kind === 'plugin') {
+    if (current.source.kind === 'plugin') {
       throw new ApiError(409, { error: 'manager_owned_by_plugin' });
     }
-    await this.db.query(
-      `update managers set name = $3, updated_at = now() where id = $1 and project_id = $2`,
-      [managerId, project.id, name],
-    );
-    const stages = await loadCurrentStages(this.db, project.id);
+    await this.db.client.manager.update({
+      where: { id: managerId },
+      data: { name, updated_at: new Date() },
+    });
+    const stages = await loadCurrentStages(this.db.client, project.id);
     return this.one(project.id, managerId, stages, null, null);
   }
 

@@ -22,11 +22,10 @@ export class SessionService {
     if (!email || !password) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }
-    const result = await this.db.query<{ id: string; password_hash: string; is_active: boolean }>(
-      `select id, password_hash, is_active from accounts where lower(email) = $1`,
-      [email],
-    );
-    const account = result.rows[0];
+    const rows = await this.db.client.$queryRaw<
+      Array<{ id: string; password_hash: string; is_active: boolean }>
+    >`select id, password_hash, is_active from accounts where lower(email) = lower(${email})`;
+    const account = rows[0];
     if (!account || !account.is_active || !(await verifyPassword(password, account.password_hash))) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }
@@ -62,15 +61,20 @@ export class SessionService {
   }
 
   private async memberships(accountId: string): Promise<{ id: string; name: string; role: string }[]> {
-    const result = await this.db.query<{ id: string; name: string; role: string }>(
-      `select p.id, p.name, m.role
-       from project_memberships m
-       join projects p on p.id = m.project_id
-       where m.account_id = $1
-       order by p.created_at asc, p.id asc`,
-      [accountId],
-    );
-    return result.rows;
+    const rows = await this.db.client.projectMembership.findMany({
+      where: { account_id: accountId },
+      select: {
+        role: true,
+        project: { select: { id: true, name: true, created_at: true } },
+      },
+    });
+    return rows
+      .sort(
+        (left, right) =>
+          left.project.created_at.getTime() - right.project.created_at.getTime() ||
+          left.project.id.localeCompare(right.project.id),
+      )
+      .map((row) => ({ id: row.project.id, name: row.project.name, role: row.role }));
   }
 }
 

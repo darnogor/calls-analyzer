@@ -25,15 +25,18 @@ export class SourcesService {
 
   async list(account: AuthAccount, projectId: string): Promise<{ items: Record<string, unknown>[] }> {
     const project = await this.access.require(account, projectId, 'write');
-    const result = await this.db.query<SourceRow>(
-      `select id, kind, provider, display_name, last_intake_at
-       from sources
-       where project_id = $1
-       order by case when kind = 'manual' then 0 else 1 end, created_at asc, id asc`,
-      [project.id],
+    const rows = await this.db.client.source.findMany({
+      where: { project_id: project.id },
+      select: { id: true, kind: true, provider: true, display_name: true, last_intake_at: true, created_at: true },
+    });
+    rows.sort(
+      (left, right) =>
+        (left.kind === 'manual' ? 0 : 1) - (right.kind === 'manual' ? 0 : 1) ||
+        left.created_at.getTime() - right.created_at.getTime() ||
+        left.id.localeCompare(right.id),
     );
     return {
-      items: result.rows.map((row) => ({
+      items: rows.map((row) => ({
         id: row.id,
         kind: row.kind,
         provider: row.provider,
@@ -51,17 +54,22 @@ export class SourcesService {
     }
     const id = randomUUID();
     const setupCode = newSecret();
-    const result = await this.db.query<{ expires_at: Date }>(
-      `insert into sources (
-         id, project_id, kind, provider, display_name, setup_code_hash, setup_code_expires_at
-       ) values ($1, $2, 'plugin', $3, $4, $5, now() + interval '15 minutes')
-       returning setup_code_expires_at as expires_at`,
-      [id, project.id, parsed.provider, parsed.display_name, secretHash(setupCode)],
-    );
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    await this.db.client.source.create({
+      data: {
+        id,
+        project_id: project.id,
+        kind: 'plugin',
+        provider: parsed.provider,
+        display_name: parsed.display_name,
+        setup_code_hash: secretHash(setupCode),
+        setup_code_expires_at: expiresAt,
+      },
+    });
     return {
       source_id: id,
       setup_code: setupCode,
-      expires_at: iso(result.rows[0]?.expires_at),
+      expires_at: iso(expiresAt),
     };
   }
 
@@ -71,38 +79,33 @@ export class SourcesService {
       throw new ApiError(422, { error: 'invalid_payload' });
     }
     const token = newSecret();
-    return this.db.tx(async (client) => {
-      const result = await client.query<{
-        id: string;
-        project_id: string;
-        used_at: Date | null;
-        expired: boolean;
-      }>(
+    return this.db.client.$transaction(async (tx) => {
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ id: string; project_id: string; used_at: Date | null; expires_at: Date | null }>
+      >(
         `select id,
                 project_id,
                 setup_code_used_at as used_at,
-                setup_code_expires_at <= now() as expired
+                setup_code_expires_at as expires_at
          from sources
          where setup_code_hash = $1
          for update`,
-        [secretHash(setupCode)],
+        secretHash(setupCode),
       );
-      const row = result.rows[0];
+      const row = rows[0];
       if (!row) {
         throw new ApiError(401, { error: 'setup_code_expired' });
       }
       if (row.used_at) {
         throw new ApiError(401, { error: 'setup_code_used' });
       }
-      if (row.expired) {
+      if (!row.expires_at || row.expires_at.getTime() <= Date.now()) {
         throw new ApiError(401, { error: 'setup_code_expired' });
       }
-      await client.query(
-        `update sources
-         set token_hash = $2, setup_code_used_at = now()
-         where id = $1`,
-        [row.id, secretHash(token)],
-      );
+      await tx.source.update({
+        where: { id: row.id },
+        data: { token_hash: secretHash(token), setup_code_used_at: new Date() },
+      });
       return {
         project_id: row.project_id,
         source_id: row.id,

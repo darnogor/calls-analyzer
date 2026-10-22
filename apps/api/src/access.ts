@@ -21,21 +21,20 @@ export class ProjectAccess {
     if (!isUuid(projectId)) {
       throw new ApiError(404, { error: 'project_not_found' });
     }
-    const project = await this.db.query<ProjectRecord>(
-      `select id, name, timezone, min_call_duration_sec from projects where id = $1`,
-      [projectId],
-    );
-    const row = project.rows[0];
+    const row = await this.db.client.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, name: true, timezone: true, min_call_duration_sec: true },
+    });
     if (!row) {
       throw new ApiError(404, { error: 'project_not_found' });
     }
     let role: string | null = null;
     if (!account.is_administrator) {
-      const membership = await this.db.query<{ role: string }>(
-        `select role from project_memberships where account_id = $1 and project_id = $2`,
-        [account.id, projectId],
-      );
-      role = membership.rows[0]?.role ?? null;
+      const membership = await this.db.client.projectMembership.findUnique({
+        where: { account_id_project_id: { account_id: account.id, project_id: projectId } },
+        select: { role: true },
+      });
+      role = membership?.role ?? null;
     }
     const decision = decideProjectAccess(account.is_administrator, role, action);
     if (decision === 'not_found') {

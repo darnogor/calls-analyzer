@@ -24,14 +24,12 @@ export class InputsService {
 
   async list(account: AuthAccount, projectId: string): Promise<{ items: Record<string, unknown>[] }> {
     const project = await this.access.require(account, projectId, 'write');
-    const result = await this.db.query<InputRow>(
-      `select id, title, body, updated_at
-       from project_inputs
-       where project_id = $1
-       order by updated_at asc, id asc`,
-      [project.id],
-    );
-    return { items: result.rows.map(presentInput) };
+    const rows = await this.db.client.projectInput.findMany({
+      where: { project_id: project.id },
+      orderBy: [{ updated_at: 'asc' }, { id: 'asc' }],
+      select: { id: true, title: true, body: true, updated_at: true },
+    });
+    return { items: rows.map(presentInput) };
   }
 
   async create(account: AuthAccount, projectId: string, body: unknown): Promise<Record<string, unknown>> {
@@ -40,13 +38,11 @@ export class InputsService {
     if (!parsed) {
       throw new ApiError(422, { error: 'invalid_input' });
     }
-    const result = await this.db.query<InputRow>(
-      `insert into project_inputs (id, project_id, title, body)
-       values ($1, $2, $3, $4)
-       returning id, title, body, updated_at`,
-      [randomUUID(), project.id, parsed.title, parsed.body],
-    );
-    return presentInput(result.rows[0]!);
+    const row = await this.db.client.projectInput.create({
+      data: { id: randomUUID(), project_id: project.id, title: parsed.title, body: parsed.body },
+      select: { id: true, title: true, body: true, updated_at: true },
+    });
+    return presentInput(row);
   }
 
   async update(
@@ -63,14 +59,17 @@ export class InputsService {
     if (!parsed) {
       throw new ApiError(422, { error: 'invalid_input' });
     }
-    const result = await this.db.query<InputRow>(
-      `update project_inputs
-       set title = $3, body = $4, updated_at = now()
-       where id = $1 and project_id = $2
-       returning id, title, body, updated_at`,
-      [inputId, project.id, parsed.title, parsed.body],
-    );
-    const row = result.rows[0];
+    const updated = await this.db.client.projectInput.updateMany({
+      where: { id: inputId, project_id: project.id },
+      data: { title: parsed.title, body: parsed.body, updated_at: new Date() },
+    });
+    if (!updated.count) {
+      throw new ApiError(404, { error: 'input_not_found' });
+    }
+    const row = await this.db.client.projectInput.findUnique({
+      where: { id: inputId },
+      select: { id: true, title: true, body: true, updated_at: true },
+    });
     if (!row) {
       throw new ApiError(404, { error: 'input_not_found' });
     }
@@ -82,11 +81,10 @@ export class InputsService {
     if (!isUuid(inputId)) {
       throw new ApiError(404, { error: 'input_not_found' });
     }
-    const result = await this.db.query(
-      `delete from project_inputs where id = $1 and project_id = $2`,
-      [inputId, project.id],
-    );
-    if (!result.rowCount) {
+    const removed = await this.db.client.projectInput.deleteMany({
+      where: { id: inputId, project_id: project.id },
+    });
+    if (!removed.count) {
       throw new ApiError(404, { error: 'input_not_found' });
     }
   }

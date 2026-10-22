@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { createClient, type RedisClientType } from 'redis';
+import { Prisma } from '@calls/db';
 import { type StageError } from './attempts';
 import { AppConfig } from './config';
 import { Database } from './db';
@@ -79,48 +80,53 @@ export class MediaWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async loadCall(projectId: string, callId: string): Promise<CallAudio | null> {
-    const result = await this.db.query<CallAudio>(
-      `select processing_status, duration_sec, recording_storage_key, recording_content_type
-       from calls where id = $1 and project_id = $2`,
-      [callId, projectId],
-    );
-    return result.rows[0] ?? null;
+    return this.db.client.call.findFirst({
+      where: { id: callId, project_id: projectId },
+      select: {
+        processing_status: true,
+        duration_sec: true,
+        recording_storage_key: true,
+        recording_content_type: true,
+      },
+    });
   }
 
   private async loadMinDuration(projectId: string): Promise<number | null> {
-    const result = await this.db.query<{ min_call_duration_sec: number }>(
-      'select min_call_duration_sec from projects where id = $1',
-      [projectId],
-    );
-    return result.rows[0]?.min_call_duration_sec ?? null;
+    const project = await this.db.client.project.findUnique({
+      where: { id: projectId },
+      select: { min_call_duration_sec: true },
+    });
+    return project?.min_call_duration_sec ?? null;
+  }
+
+  private activeWhere(projectId: string, callId: string) {
+    return { id: callId, project_id: projectId, processing_status: { in: [...ACTIVE] } };
   }
 
   private async claim(projectId: string, callId: string): Promise<boolean> {
-    const result = await this.db.query(
-      `update calls
-       set processing_status = 'audio_fetch', updated_at = now()
-       where id = $1 and project_id = $2 and processing_status = any($3::text[])`,
-      [callId, projectId, ACTIVE],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const result = await this.db.client.call.updateMany({
+      where: this.activeWhere(projectId, callId),
+      data: { processing_status: 'audio_fetch', updated_at: new Date() },
+    });
+    return result.count > 0;
   }
 
   private async saveObject(projectId: string, callId: string, key: string, contentType: string): Promise<void> {
-    await this.db.query(
-      `update calls
-       set recording_storage_key = $3, recording_content_type = $4, updated_at = now()
-       where id = $1 and project_id = $2 and processing_status = any($5::text[])`,
-      [callId, projectId, key, contentType, ACTIVE],
-    );
+    await this.db.client.call.updateMany({
+      where: this.activeWhere(projectId, callId),
+      data: {
+        recording_storage_key: key,
+        recording_content_type: contentType,
+        updated_at: new Date(),
+      },
+    });
   }
 
   private async saveDuration(projectId: string, callId: string, durationSec: number): Promise<void> {
-    await this.db.query(
-      `update calls
-       set duration_sec = $3, updated_at = now()
-       where id = $1 and project_id = $2 and duration_sec is null and processing_status = any($4::text[])`,
-      [callId, projectId, durationSec, ACTIVE],
-    );
+    await this.db.client.call.updateMany({
+      where: { ...this.activeWhere(projectId, callId), duration_sec: null },
+      data: { duration_sec: durationSec, updated_at: new Date() },
+    });
   }
 
   private async finish(
@@ -129,26 +135,28 @@ export class MediaWorker implements OnModuleInit, OnModuleDestroy {
     status: 'skipped_short' | 'skipped_no_duration' | 'recording_missing',
     fields: { durationSec: number | null; key: string | null; contentType: string | null },
   ): Promise<void> {
-    await this.db.query(
-      `update calls
-       set processing_status = $3,
-           duration_sec = coalesce($4, duration_sec),
-           recording_storage_key = coalesce($5, recording_storage_key),
-           recording_content_type = coalesce($6, recording_content_type),
-           error = null,
-           updated_at = now()
-       where id = $1 and project_id = $2 and processing_status = any($7::text[])`,
-      [callId, projectId, status, fields.durationSec, fields.key, fields.contentType, ACTIVE],
-    );
+    await this.db.client.call.updateMany({
+      where: this.activeWhere(projectId, callId),
+      data: {
+        processing_status: status,
+        ...(fields.durationSec !== null ? { duration_sec: fields.durationSec } : {}),
+        ...(fields.key !== null ? { recording_storage_key: fields.key } : {}),
+        ...(fields.contentType !== null ? { recording_content_type: fields.contentType } : {}),
+        error: Prisma.DbNull,
+        updated_at: new Date(),
+      },
+    });
   }
 
   private async fail(projectId: string, callId: string, error: StageError): Promise<void> {
-    await this.db.query(
-      `update calls
-       set processing_status = 'failed', error = $3::jsonb, updated_at = now()
-       where id = $1 and project_id = $2 and processing_status = any($4::text[])`,
-      [callId, projectId, JSON.stringify(error), ACTIVE],
-    );
+    await this.db.client.call.updateMany({
+      where: this.activeWhere(projectId, callId),
+      data: {
+        processing_status: 'failed',
+        error,
+        updated_at: new Date(),
+      },
+    });
   }
 
   private async enqueue(queue: string, message: TranscribeMessage): Promise<void> {

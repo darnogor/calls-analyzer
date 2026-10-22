@@ -1,23 +1,20 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { Pool, type QueryResult, type QueryResultRow } from 'pg';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { createPrisma, type PrismaClient } from '@calls/db';
 import { AppConfig } from './config';
 
 @Injectable()
-export class Database implements OnModuleDestroy {
-  private readonly pool: Pool;
+export class Database implements OnModuleInit, OnModuleDestroy {
+  readonly client: PrismaClient;
 
   constructor(config: AppConfig) {
-    this.pool = new Pool({ connectionString: config.databaseUrl });
-    this.pool.on('error', (error) => {
-      console.error('postgres pool error', error);
-    });
+    this.client = createPrisma(config.databaseUrl);
   }
 
-  query<T extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<QueryResult<T>> {
-    return this.pool.query<T>(text, params);
+  async onModuleInit(): Promise<void> {
+    await this.client.$connect();
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.pool.end();
+    await this.client.$disconnect();
   }
 }

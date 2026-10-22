@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { assertAdministrator } from '../access';
 import type { AuthAccount } from '../auth/auth.guard';
 import { hashPassword } from '../auth/password';
-import { Database, isUniqueViolation, type Queryable } from '../db/database';
+import { isUniqueViolation, type TransactionClient } from '@calls/db';
+import { Database } from '../db/database';
 import { ApiError } from '../errors';
 import { isUuid } from '../ids';
 import {
@@ -23,24 +24,14 @@ type AccountRow = {
   projects: unknown;
 };
 
-const ACCOUNT_SELECT = `
-  select
-    a.id,
-    a.email,
-    a.name,
-    a.is_administrator,
-    a.is_active,
-    coalesce(
-      jsonb_agg(
-        jsonb_build_object('id', p.id, 'name', p.name, 'role', m.role)
-        order by p.created_at asc, p.id asc
-      ) filter (where p.id is not null),
-      '[]'::jsonb
-    ) as projects
-  from accounts a
-  left join project_memberships m on m.account_id = a.id
-  left join projects p on p.id = m.project_id
-`;
+const accountInclude = {
+  memberships: {
+    select: {
+      role: true,
+      project: { select: { id: true, name: true, created_at: true } },
+    },
+  },
+} as const;
 
 @Injectable()
 export class AccountsService {
@@ -48,12 +39,11 @@ export class AccountsService {
 
   async list(account: AuthAccount): Promise<{ items: Record<string, unknown>[] }> {
     assertAdministrator(account);
-    const result = await this.db.query<AccountRow>(
-      `${ACCOUNT_SELECT}
-       group by a.id
-       order by a.created_at asc, a.id asc`,
-    );
-    return { items: result.rows.map(presentAccount) };
+    const rows = await this.db.client.account.findMany({
+      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+      include: accountInclude,
+    });
+    return { items: rows.map((row) => presentAccount(toAccountRow(row))) };
   }
 
   async create(account: AuthAccount, body: unknown): Promise<Record<string, unknown>> {
@@ -65,11 +55,16 @@ export class AccountsService {
     const id = randomUUID();
     const passwordHash = await hashPassword(parsed.password);
     try {
-      await this.db.query(
-        `insert into accounts (id, email, name, password_hash, is_administrator, is_active)
-         values ($1, $2, $3, $4, $5, true)`,
-        [id, parsed.email, parsed.name, passwordHash, parsed.is_administrator],
-      );
+      await this.db.client.account.create({
+        data: {
+          id,
+          email: parsed.email,
+          name: parsed.name,
+          password_hash: passwordHash,
+          is_administrator: parsed.is_administrator,
+          is_active: true,
+        },
+      });
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ApiError(409, { error: 'email_taken' });
@@ -89,20 +84,17 @@ export class AccountsService {
       throw new ApiError(422, { error: 'invalid_payload' });
     }
     const passwordHash = patch.password ? await hashPassword(patch.password) : null;
-    await this.db.tx(async (client) => {
-      const current = await client.query<{
-        email: string;
-        name: string;
-        is_administrator: boolean;
-        is_active: boolean;
-      }>(
+    await this.db.client.$transaction(async (tx) => {
+      const locked = await tx.$queryRawUnsafe<
+        Array<{ email: string; name: string; is_administrator: boolean; is_active: boolean }>
+      >(
         `select email, name, is_administrator, is_active
          from accounts
          where id = $1
          for update`,
-        [accountId],
+        accountId,
       );
-      const row = current.rows[0];
+      const row = locked[0];
       if (!row) {
         throw new ApiError(404, { error: 'account_not_found' });
       }
@@ -112,27 +104,24 @@ export class AccountsService {
         is_administrator: patch.is_administrator ?? row.is_administrator,
         is_active: patch.is_active ?? row.is_active,
       };
-      const others = await client.query<{ count: number }>(
-        `select count(*)::int as count
-         from accounts
-         where is_administrator = true and is_active = true and id <> $1`,
-        [accountId],
-      );
-      if (removesLastActiveAdministrator(row, next, others.rows[0]?.count ?? 0)) {
+      const others = await tx.account.count({
+        where: { is_administrator: true, is_active: true, id: { not: accountId } },
+      });
+      if (removesLastActiveAdministrator(row, next, others)) {
         throw new ApiError(409, { error: 'last_administrator' });
       }
       try {
-        await client.query(
-          `update accounts
-           set email = $2,
-               name = $3,
-               is_administrator = $4,
-               is_active = $5,
-               password_hash = coalesce($6, password_hash),
-               updated_at = now()
-           where id = $1`,
-          [accountId, next.email, next.name, next.is_administrator, next.is_active, passwordHash],
-        );
+        await tx.account.update({
+          where: { id: accountId },
+          data: {
+            email: next.email,
+            name: next.name,
+            is_administrator: next.is_administrator,
+            is_active: next.is_active,
+            ...(passwordHash ? { password_hash: passwordHash } : {}),
+            updated_at: new Date(),
+          },
+        });
       } catch (error) {
         if (isUniqueViolation(error)) {
           throw new ApiError(409, { error: 'email_taken' });
@@ -152,40 +141,43 @@ export class AccountsService {
     if (!items) {
       throw new ApiError(422, { error: 'invalid_payload' });
     }
-    await this.db.tx(async (client) => {
-      const existing = await client.query(`select id from accounts where id = $1 for update`, [accountId]);
-      if (!existing.rowCount) {
+    await this.db.client.$transaction(async (tx) => {
+      const existing = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+        `select id from accounts where id = $1 for update`,
+        accountId,
+      );
+      if (!existing.length) {
         throw new ApiError(404, { error: 'account_not_found' });
       }
-      await assertProjectsExist(client, items);
-      await client.query(`delete from project_memberships where account_id = $1`, [accountId]);
-      for (const item of items) {
-        await client.query(
-          `insert into project_memberships (id, account_id, project_id, role)
-           values ($1, $2, $3, $4)`,
-          [randomUUID(), accountId, item.project_id, item.role],
-        );
+      await assertProjectsExist(tx, items);
+      await tx.projectMembership.deleteMany({ where: { account_id: accountId } });
+      if (items.length > 0) {
+        await tx.projectMembership.createMany({
+          data: items.map((item) => ({
+            id: randomUUID(),
+            account_id: accountId,
+            project_id: item.project_id,
+            role: item.role,
+          })),
+        });
       }
     });
     return this.requireAccount(accountId);
   }
 
   private async requireAccount(accountId: string): Promise<Record<string, unknown>> {
-    const result = await this.db.query<AccountRow>(
-      `${ACCOUNT_SELECT}
-       where a.id = $1
-       group by a.id`,
-      [accountId],
-    );
-    const row = result.rows[0];
+    const row = await this.db.client.account.findUnique({
+      where: { id: accountId },
+      include: accountInclude,
+    });
     if (!row) {
       throw new ApiError(404, { error: 'account_not_found' });
     }
-    return presentAccount(row);
+    return presentAccount(toAccountRow(row));
   }
 }
 
-async function assertProjectsExist(client: Queryable, items: MembershipItem[]): Promise<void> {
+async function assertProjectsExist(client: TransactionClient, items: MembershipItem[]): Promise<void> {
   if (items.length === 0) {
     return;
   }
@@ -193,11 +185,39 @@ async function assertProjectsExist(client: Queryable, items: MembershipItem[]): 
     if (!isUuid(item.project_id)) {
       throw new ApiError(404, { error: 'project_not_found' });
     }
-    const found = await client.query(`select id from projects where id = $1`, [item.project_id]);
-    if (!found.rowCount) {
+    const found = await client.project.findUnique({ where: { id: item.project_id }, select: { id: true } });
+    if (!found) {
       throw new ApiError(404, { error: 'project_not_found' });
     }
   }
+}
+
+function toAccountRow(row: {
+  id: string;
+  email: string;
+  name: string;
+  is_administrator: boolean;
+  is_active: boolean;
+  memberships: Array<{ role: string; project: { id: string; name: string; created_at: Date } }>;
+}): AccountRow {
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    is_administrator: row.is_administrator,
+    is_active: row.is_active,
+    projects: [...row.memberships]
+      .sort(
+        (left, right) =>
+          left.project.created_at.getTime() - right.project.created_at.getTime() ||
+          left.project.id.localeCompare(right.project.id),
+      )
+      .map((membership) => ({
+        id: membership.project.id,
+        name: membership.project.name,
+        role: membership.role,
+      })),
+  };
 }
 
 function presentAccount(row: AccountRow): Record<string, unknown> {
