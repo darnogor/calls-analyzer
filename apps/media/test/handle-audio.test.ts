@@ -101,7 +101,7 @@ describe('media pipeline', () => {
   it('publishes transcribe without downloading when the key and duration are already known', async () => {
     const fake = harness({
       processing_status: 'audio_queued',
-      duration_sec: 10,
+      duration_sec: 200,
       recording_storage_key: 'projects/p1/calls/c1.mp3',
       recording_content_type: 'audio/mpeg',
     });
@@ -143,8 +143,63 @@ describe('media pipeline', () => {
     assert.equal(result.action, 'ack');
     assert.deepEqual(fake.puts, []);
     assert.deepEqual(fake.queued, []);
+    assert.deepEqual(fake.durations, []);
+    assert.deepEqual(fake.statuses, ['skipped_short']);
     assert.equal(fake.state.processing_status, 'skipped_short');
     assert.equal(fake.state.duration_sec, 1);
+  });
+
+  it('does not publish speech when a retry already sees a stored short duration', async () => {
+    const fake = harness(
+      {
+        processing_status: 'audio_fetch',
+        duration_sec: 10,
+        recording_storage_key: 'projects/p1/calls/c1.mp3',
+        recording_content_type: 'audio/mpeg',
+      },
+      { min: 180 },
+    );
+    const result = await handleAudioFetch(
+      message({ type: 'object', bucket: 'recordings', key: 'projects/p1/calls/c1.mp3', content_type: 'audio/mpeg' }),
+      fake.deps,
+    );
+    assert.equal(result.action, 'ack');
+    assert.deepEqual(fake.queued, []);
+    assert.equal(fake.state.processing_status, 'skipped_short');
+    assert.equal(fake.state.duration_sec, 10);
+  });
+
+  it('does not send a short call to speech when the status write fails', async () => {
+    const fake = harness(
+      {
+        processing_status: 'audio_queued',
+        duration_sec: null,
+        recording_storage_key: 'projects/p1/calls/c1.wav',
+        recording_content_type: 'audio/wav',
+      },
+      { object: wav(1), min: 180 },
+    );
+    const savedFinish = fake.deps.finish;
+    fake.deps.finish = async () => {
+      throw new Error('status write failed');
+    };
+    const first = await handleAudioFetch(
+      message({ type: 'object', bucket: 'recordings', key: 'projects/p1/calls/c1.wav', content_type: 'audio/wav' }),
+      fake.deps,
+    );
+    assert.equal(first.action, 'retry');
+    assert.deepEqual(fake.queued, []);
+    assert.equal(fake.state.duration_sec, null);
+
+    fake.state.duration_sec = 1;
+    fake.deps.finish = savedFinish;
+    const second = await handleAudioFetch(
+      message({ type: 'object', bucket: 'recordings', key: 'projects/p1/calls/c1.wav', content_type: 'audio/wav' }),
+      fake.deps,
+    );
+    assert.equal(second.action, 'ack');
+    assert.deepEqual(fake.queued, []);
+    assert.equal(fake.state.processing_status, 'skipped_short');
   });
 
   it('marks skipped_no_duration when the file has no duration and does not enqueue speech', async () => {

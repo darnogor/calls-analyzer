@@ -87,6 +87,14 @@ async function processAudio(message: AudioMessage, call: CallAudio, deps: MediaD
   let duration = call.duration_sec;
 
   if (key && hadDuration) {
+    if (isShort(duration, minDuration)) {
+      await deps.finish(message.project_id, message.call_id, 'skipped_short', {
+        durationSec: duration,
+        key,
+        contentType,
+      });
+      return { action: 'ack' };
+    }
     await deps.enqueueTranscribe(transcribeMessage(message, deps, key, contentType || 'application/octet-stream'));
     return { action: 'ack' };
   }
@@ -147,7 +155,6 @@ async function processAudio(message: AudioMessage, call: CallAudio, deps: MediaD
       return { action: 'ack' };
     }
     duration = whole;
-    await deps.saveDuration(message.project_id, message.call_id, whole);
     if (whole < minDuration) {
       await deps.finish(message.project_id, message.call_id, 'skipped_short', {
         durationSec: whole,
@@ -156,6 +163,16 @@ async function processAudio(message: AudioMessage, call: CallAudio, deps: MediaD
       });
       return { action: 'ack' };
     }
+    await deps.saveDuration(message.project_id, message.call_id, whole);
+  }
+
+  if (isShort(duration, minDuration)) {
+    await deps.finish(message.project_id, message.call_id, 'skipped_short', {
+      durationSec: duration,
+      key,
+      contentType,
+    });
+    return { action: 'ack' };
   }
 
   if (!key) {
@@ -165,6 +182,10 @@ async function processAudio(message: AudioMessage, call: CallAudio, deps: MediaD
     transcribeMessage(message, deps, key, contentType || 'application/octet-stream'),
   );
   return { action: 'ack' };
+}
+
+function isShort(duration: number | null, minDuration: number): boolean {
+  return duration !== null && duration < minDuration;
 }
 
 function transcribeMessage(
