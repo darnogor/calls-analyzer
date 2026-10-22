@@ -5,7 +5,7 @@ import { ProjectAccess, type ProjectRecord } from '../access';
 import { Database, isUniqueViolation, type Queryable } from '../db/database';
 import { ApiError } from '../errors';
 import { isUuid } from '../ids';
-import { audioFetchMessage, AudioQueue } from '../queue/audio-queue';
+import { audioFetchMessage, AudioQueue, type AudioFetchMessage } from '../queue/audio-queue';
 import { Recordings } from '../storage/recordings';
 import { audioObject } from './audio-ext';
 import { durationBelowMinimum } from './duration';
@@ -262,8 +262,9 @@ export class CallsService {
     if (file && storageKey && audio) {
       await this.recordings.put(storageKey, file.buffer, audio.contentType);
     }
+    let fetchAudio: AudioFetchMessage['audio'] | null = null;
     try {
-      await this.db.tx(async (client) => {
+      fetchAudio = await this.db.tx(async (client) => {
         const managerId = await upsertManager(client, project.id, sourceId, intake.manager);
         const contactId = await upsertContact(client, project.id, sourceId, intake.contact);
         const deal = storedDeal(intake.deal);
@@ -307,24 +308,19 @@ export class CallsService {
             processingStatus,
           ],
         );
-        if (file && storageKey && audio) {
-          await this.queue.enqueue(
-            audioFetchMessage(project.id, callId, {
-              type: 'object',
-              bucket: this.recordings.bucket,
-              key: storageKey,
-              content_type: audio.contentType,
-            }),
-          );
-        } else if (intake.recording) {
-          await this.queue.enqueue(
-            audioFetchMessage(project.id, callId, {
-              type: 'url',
-              url: intake.recording.url,
-            }),
-          );
-        }
         await client.query('update sources set last_intake_at = now() where id = $1', [sourceId]);
+        if (file && storageKey && audio) {
+          return {
+            type: 'object' as const,
+            bucket: this.recordings.bucket,
+            key: storageKey,
+            content_type: audio.contentType,
+          };
+        }
+        if (intake.recording) {
+          return { type: 'url' as const, url: intake.recording.url };
+        }
+        return null;
       });
     } catch (error) {
       if (storageKey) {
@@ -333,6 +329,9 @@ export class CallsService {
         });
       }
       throw error;
+    }
+    if (fetchAudio) {
+      await this.queue.enqueue(audioFetchMessage(project.id, callId, fetchAudio));
     }
     return {
       status: 201,
@@ -379,8 +378,14 @@ export class CallsService {
       await this.recordings.put(storageKey, file.buffer, contentType);
     }
 
+    let result: {
+      attached: boolean;
+      keptKey: string | null;
+      fetchAudio: AudioFetchMessage['audio'] | null;
+      body: IntakeResult;
+    };
     try {
-      const result = await this.db.tx(async (client) => {
+      result = await this.db.tx(async (client) => {
         const locked = await client.query<{
           processing_status: string;
           recording_storage_key: string | null;
@@ -394,12 +399,14 @@ export class CallsService {
           return {
             attached: false,
             keptKey: locked.rows[0]?.recording_storage_key ?? null,
+            fetchAudio: null,
             body: {
               status: 200,
               body: { id: callId, created: false, processing_status: status },
             } satisfies IntakeResult,
           };
         }
+        let fetchAudio: AudioFetchMessage['audio'] | null = null;
         if (file && storageKey && contentType) {
           await client.query(
             `update calls
@@ -412,14 +419,12 @@ export class CallsService {
              where id = $1`,
             [callId, storageKey, contentType, intake.duration_sec ?? null],
           );
-          await this.queue.enqueue(
-            audioFetchMessage(project.id, callId, {
-              type: 'object',
-              bucket: this.recordings.bucket,
-              key: storageKey,
-              content_type: contentType,
-            }),
-          );
+          fetchAudio = {
+            type: 'object',
+            bucket: this.recordings.bucket,
+            key: storageKey,
+            content_type: contentType,
+          };
         } else if (intake.recording) {
           await client.query(
             `update calls
@@ -432,30 +437,32 @@ export class CallsService {
              where id = $1`,
             [callId, intake.recording.url, intake.duration_sec ?? null],
           );
-          await this.queue.enqueue(
-            audioFetchMessage(project.id, callId, { type: 'url', url: intake.recording.url }),
-          );
+          fetchAudio = { type: 'url', url: intake.recording.url };
         }
         await client.query('update sources set last_intake_at = now() where id = $1', [sourceId]);
         return {
           attached: true,
           keptKey: storageKey,
+          fetchAudio,
           body: {
             status: 200,
             body: { id: callId, created: false, processing_status: 'audio_queued' },
           } satisfies IntakeResult,
         };
       });
-      if (!result.attached && storageKey && result.keptKey !== storageKey) {
-        await this.recordings.remove(storageKey).catch((error) => console.error('remove object', error));
-      }
-      return result.body;
     } catch (error) {
       if (storageKey) {
         await this.recordings.remove(storageKey).catch((removeError) => console.error('remove object', removeError));
       }
       throw error;
     }
+    if (!result.attached && storageKey && result.keptKey !== storageKey) {
+      await this.recordings.remove(storageKey).catch((error) => console.error('remove object', error));
+    }
+    if (result.fetchAudio) {
+      await this.queue.enqueue(audioFetchMessage(project.id, callId, result.fetchAudio));
+    }
+    return result.body;
   }
 
   private async manualSource(projectId: string): Promise<string> {

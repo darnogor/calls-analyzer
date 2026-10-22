@@ -1,4 +1,19 @@
+import { BlockList, isIPv4, isIPv6 } from 'node:net';
 import { isUuid } from '../ids';
+
+const COMPOSE_HOSTS = new Set(['minio', 'postgres', 'redis', 'api']);
+
+const NON_PUBLIC = new BlockList();
+NON_PUBLIC.addSubnet('0.0.0.0', 8, 'ipv4');
+NON_PUBLIC.addSubnet('10.0.0.0', 8, 'ipv4');
+NON_PUBLIC.addSubnet('127.0.0.0', 8, 'ipv4');
+NON_PUBLIC.addSubnet('169.254.0.0', 16, 'ipv4');
+NON_PUBLIC.addSubnet('172.16.0.0', 12, 'ipv4');
+NON_PUBLIC.addSubnet('192.168.0.0', 16, 'ipv4');
+NON_PUBLIC.addAddress('::', 'ipv6');
+NON_PUBLIC.addAddress('::1', 'ipv6');
+NON_PUBLIC.addSubnet('fe80::', 10, 'ipv6');
+NON_PUBLIC.addSubnet('fc00::', 7, 'ipv6');
 
 const STARTED_AT =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -124,10 +139,37 @@ function readRecording(value: unknown): Ok<{ type: 'url'; url: string } | undefi
     return { ok: false };
   }
   const url = readOptionalString(value.url, 2000);
-  if (!url.ok || url.value === undefined) {
+  if (!url.ok || url.value === undefined || !isPublicHttpUrl(url.value)) {
     return { ok: false };
   }
   return { ok: true, value: { type: 'url', url: url.value } };
+}
+
+function isPublicHttpUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false;
+  }
+  let host = parsed.hostname.toLowerCase();
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.slice(1, -1);
+  }
+  host = host.replace(/\.+$/, '');
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || COMPOSE_HOSTS.has(host)) {
+    return false;
+  }
+  if (isIPv4(host)) {
+    return !NON_PUBLIC.check(host, 'ipv4');
+  }
+  if (isIPv6(host)) {
+    return !NON_PUBLIC.check(host, 'ipv6');
+  }
+  return true;
 }
 
 function readManager(value: unknown): Ok<Intake['manager']> | Fail {
