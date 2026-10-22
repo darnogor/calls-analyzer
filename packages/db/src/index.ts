@@ -1,4 +1,5 @@
 import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 import { Prisma, PrismaClient } from './generated/prisma/client';
 
 export { Prisma };
@@ -7,14 +8,24 @@ export type { PrismaClient };
 export type TransactionClient = Prisma.TransactionClient;
 
 export function createPrisma(databaseUrl: string): PrismaClient {
-  const adapter = new PrismaPg(
-    { connectionString: databaseUrl },
-    {
-      onPoolError(error) {
-        console.error('postgres pool error', error);
-      },
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    // Startup option applies before the first query. onConnect covers pools that
+    // would otherwise inherit a non-UTC TimeZone from the database or role.
+    options: '-c TimeZone=UTC',
+    onConnect(client) {
+      return client.query("SET TIME ZONE 'UTC'");
     },
-  );
+  });
+  pool.on('error', (error) => {
+    console.error('postgres pool error', error);
+  });
+  const adapter = new PrismaPg(pool, {
+    disposeExternalPool: true,
+    onPoolError(error) {
+      console.error('postgres pool error', error);
+    },
+  });
   return new PrismaClient({ adapter });
 }
 

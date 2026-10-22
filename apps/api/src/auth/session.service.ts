@@ -22,10 +22,10 @@ export class SessionService {
     if (!email || !password) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }
-    const account = await this.db.client.account.findFirst({
-      where: { email: { equals: email, mode: 'insensitive' } },
-      select: { id: true, password_hash: true, is_active: true },
-    });
+    const rows = await this.db.client.$queryRaw<
+      Array<{ id: string; password_hash: string; is_active: boolean }>
+    >`select id, password_hash, is_active from accounts where lower(email) = lower(${email})`;
+    const account = rows[0];
     if (!account || !account.is_active || !(await verifyPassword(password, account.password_hash))) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }
