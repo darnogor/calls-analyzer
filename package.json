@@ -2,6 +2,7 @@
   "name": "calls-analyzer",
   "private": true,
   "workspaces": [
+    "packages/*",
     "apps/api",
     "apps/media",
     "apps/transcriber",
@@ -9,7 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test -w @calls/api"
+    "test": "npm test --workspaces --if-present"
   },
   "engines": {
     "node": ">=22"
