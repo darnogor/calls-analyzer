@@ -11,7 +11,7 @@ export type ProjectRecord = {
   min_call_duration_sec: number;
 };
 
-export type ProjectAction = 'read' | 'write' | 'problems';
+export type ProjectAction = 'read' | 'write' | 'problems' | 'settings';
 
 @Injectable()
 export class ProjectAccess {
@@ -29,20 +29,50 @@ export class ProjectAccess {
     if (!row) {
       throw new ApiError(404, { error: 'project_not_found' });
     }
-    if (account.is_administrator) {
-      return row;
+    let role: string | null = null;
+    if (!account.is_administrator) {
+      const membership = await this.db.query<{ role: string }>(
+        `select role from project_memberships where account_id = $1 and project_id = $2`,
+        [account.id, projectId],
+      );
+      role = membership.rows[0]?.role ?? null;
     }
-    const membership = await this.db.query<{ role: string }>(
-      `select role from project_memberships where account_id = $1 and project_id = $2`,
-      [account.id, projectId],
-    );
-    const role = membership.rows[0]?.role;
-    if (!role) {
+    const decision = decideProjectAccess(account.is_administrator, role, action);
+    if (decision === 'not_found') {
       throw new ApiError(404, { error: 'project_not_found' });
     }
-    if (action === 'read' || role === 'lead') {
-      return row;
+    if (decision === 'forbidden') {
+      throw new ApiError(403, { error: 'forbidden' });
     }
+    return row;
+  }
+}
+
+export function decideProjectAccess(
+  isAdministrator: boolean,
+  role: string | null,
+  action: ProjectAction,
+): 'ok' | 'not_found' | 'forbidden' {
+  if (isAdministrator) {
+    return 'ok';
+  }
+  if (!role) {
+    return 'not_found';
+  }
+  if (action === 'read') {
+    return 'ok';
+  }
+  if (action === 'settings') {
+    return 'forbidden';
+  }
+  if (role === 'lead') {
+    return 'ok';
+  }
+  return 'forbidden';
+}
+
+export function assertAdministrator(account: { is_administrator: boolean }): void {
+  if (!account.is_administrator) {
     throw new ApiError(403, { error: 'forbidden' });
   }
 }

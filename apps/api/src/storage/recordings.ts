@@ -1,10 +1,12 @@
 import {
   CreateBucketCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import type { Readable } from 'node:stream';
 import { AppConfig } from '../config';
 
 @Injectable()
@@ -55,6 +57,30 @@ export class Recordings implements OnModuleInit {
     );
   }
 
+  async open(key: string): Promise<{ stream: Readable; contentLength?: number } | null> {
+    try {
+      const result = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.config.s3Bucket,
+          Key: key,
+        }),
+      );
+      const stream = asReadable(result.Body);
+      if (!stream) {
+        return null;
+      }
+      return {
+        stream,
+        contentLength: typeof result.ContentLength === 'number' ? result.ContentLength : undefined,
+      };
+    } catch (error) {
+      if (isMissingObject(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   async remove(key: string): Promise<void> {
     await this.s3.send(
       new DeleteObjectCommand({
@@ -63,6 +89,22 @@ export class Recordings implements OnModuleInit {
       }),
     );
   }
+}
+
+function asReadable(body: unknown): Readable | null {
+  if (!body || typeof body !== 'object' || !('pipe' in body)) {
+    return null;
+  }
+  const stream = body as Readable;
+  return typeof stream.pipe === 'function' ? stream : null;
+}
+
+function isMissingObject(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const named = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return named.name === 'NoSuchKey' || named.name === 'NotFound' || named.$metadata?.httpStatusCode === 404;
 }
 
 function bucketAlreadyExists(error: unknown): boolean {

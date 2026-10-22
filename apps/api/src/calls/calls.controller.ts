@@ -30,6 +30,25 @@ export class CallsController {
     return this.calls.list(req.account, projectId, query);
   }
 
+  @Get(':callId/recording')
+  async recording(
+    @Req() req: AuthedRequest,
+    @Param('projectId') projectId: string,
+    @Param('callId') callId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const file = await this.calls.openRecording(req.account, projectId, callId);
+    res.status(200);
+    res.setHeader('Content-Type', file.contentType);
+    if (file.contentLength !== undefined) {
+      res.setHeader('Content-Length', String(file.contentLength));
+    }
+    file.stream.on('error', () => {
+      res.destroy();
+    });
+    file.stream.pipe(res);
+  }
+
   @Get(':callId')
   get(
     @Req() req: AuthedRequest,

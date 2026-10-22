@@ -12,6 +12,15 @@ const MIME_EXTENSIONS: Record<string, string> = {
   'audio/x-mpeg': 'mpeg',
 };
 
+const CONTENT_TYPE = /^[\w.+-]+\/[\w.+-]+$/;
+
+export function recordingContentType(value: string | null | undefined): string {
+  if (value && CONTENT_TYPE.test(value)) {
+    return value;
+  }
+  return 'application/octet-stream';
+}
+
 export function audioObject(file: { originalname?: string; mimetype?: string }): {
   ext: string;
   contentType: string;

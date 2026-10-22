@@ -43,8 +43,8 @@ export function parseListQuery(query: Record<string, unknown>, stageKeys: readon
     managerId = managerRaw;
   }
 
-  const dateFrom = parseDay(query.date_from);
-  const dateTo = parseDay(query.date_to);
+  const dateFrom = parseCalendarDay(query.date_from);
+  const dateTo = parseCalendarDay(query.date_to);
   const qRaw = firstString(query.q);
   const q = qRaw && qRaw !== '' ? qRaw : undefined;
   const dealRaw = firstString(query.deal_status);
@@ -101,7 +101,7 @@ export function parseListQuery(query: Record<string, unknown>, stageKeys: readon
   return parsed;
 }
 
-function parseDay(value: unknown): string | undefined {
+export function parseCalendarDay(value: unknown): string | undefined {
   const raw = firstString(value);
   if (raw === undefined || raw === '') {
     return undefined;
