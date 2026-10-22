@@ -179,6 +179,9 @@ services:
       POSTGRES_USER: calls
       POSTGRES_PASSWORD: calls
       POSTGRES_DB: calls
+    # Loopback only, so host Node can connect. Containers still use the hostname postgres.
+    ports:
+      - "127.0.0.1:${DATABASE_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -189,6 +192,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -200,6 +205,8 @@ services:
     # This tag is the same MinIO server build, pinned from a public mirror.
     image: ifirestone/minio:RELEASE.2026-09-22T19-25-18Z
     command: ["server", "/data"]
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio-secret
