@@ -1,10 +1,22 @@
-import { Body, Controller, Get, Param, Patch, Query, Req } from '@nestjs/common';
-import type { AuthedRequest } from '../auth/auth.guard';
+import { Body, Controller, Get, Param, Patch, Put, Query, Req } from '@nestjs/common';
+import type { Request } from 'express';
+import { AuthMode, type AuthedRequest } from '../auth/auth.guard';
+import { sourceFrom } from '../auth/source-tokens';
+import { DirectoryService } from '../directory/directory.service';
 import { ManagersService } from './managers.service';
 
 @Controller('api/projects/:projectId/managers')
 export class ManagersController {
-  constructor(private readonly managers: ManagersService) {}
+  constructor(
+    private readonly managers: ManagersService,
+    private readonly directory: DirectoryService,
+  ) {}
+
+  @Put()
+  @AuthMode('source')
+  sync(@Req() req: Request, @Param('projectId') projectId: string, @Body() body: unknown) {
+    return this.directory.syncManagers(sourceFrom(req), projectId, body);
+  }
 
   @Get()
   list(

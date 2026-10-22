@@ -8,8 +8,12 @@ import { BootstrapService } from './auth/bootstrap';
 import { SessionController } from './auth/session.controller';
 import { SessionService } from './auth/session.service';
 import { SessionTokens } from './auth/session-tokens';
+import { SourceTokens } from './auth/source-tokens';
 import { CallsController } from './calls/calls.controller';
 import { CallsService } from './calls/calls.service';
+import { ContactsController } from './directory/contacts.controller';
+import { DealsController } from './directory/deals.controller';
+import { DirectoryService } from './directory/directory.service';
 import { AppConfig } from './config';
 import { Database } from './db/database';
 import { HealthController } from './health.controller';
@@ -39,6 +43,8 @@ import { Recordings } from './storage/recordings';
     SourceSetupController,
     ManagersController,
     CallsController,
+    ContactsController,
+    DealsController,
   ],
   providers: [
     AppConfig,
@@ -46,6 +52,7 @@ import { Recordings } from './storage/recordings';
     AudioQueue,
     Recordings,
     SessionTokens,
+    SourceTokens,
     BootstrapService,
     SessionService,
     AccountsService,
@@ -56,6 +63,7 @@ import { Recordings } from './storage/recordings';
     SourcesService,
     ManagersService,
     CallsService,
+    DirectoryService,
     ProjectAccess,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],

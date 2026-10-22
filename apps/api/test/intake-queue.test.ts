@@ -22,7 +22,7 @@ function startedBody(extra: Record<string, unknown> = {}) {
   };
 }
 
-function harness(options?: { failSourceUpdate?: boolean; existing?: boolean }) {
+function harness(options?: { failSourceUpdate?: boolean; existing?: boolean; failCommit?: boolean }) {
   const events: string[] = [];
   const db = {
     async query(sql: string) {
@@ -30,9 +30,16 @@ function harness(options?: { failSourceUpdate?: boolean; existing?: boolean }) {
         events.push('source');
         return { rows: [{ id: 'source-1' }], rowCount: 1 };
       }
+      if (sql.includes('recording_storage_key') && sql.includes('external_id')) {
+        events.push('attach-preview');
+        return {
+          rows: [{ id: CALL, processing_status: 'recording_pending', recording_storage_key: null }],
+          rowCount: 1,
+        };
+      }
       if (sql.includes('external_id')) {
         events.push('lookup');
-        return options?.existing ? { rows: [{ id: CALL }], rowCount: 1 } : { rows: [], rowCount: 0 };
+        return options?.existing ? { rows: [{ id: CALL, source_id: 'source-1' }], rowCount: 1 } : { rows: [], rowCount: 0 };
       }
       if (sql.includes('processing_status from calls')) {
         events.push('preview');
@@ -59,7 +66,7 @@ function harness(options?: { failSourceUpdate?: boolean; existing?: boolean }) {
           }
           if (label === 'lock') {
             return {
-              rows: [{ processing_status: 'recording_pending', recording_storage_key: null }],
+              rows: [{ id: CALL, processing_status: 'recording_pending', recording_storage_key: null }],
               rowCount: 1,
             };
           }
@@ -68,10 +75,14 @@ function harness(options?: { failSourceUpdate?: boolean; existing?: boolean }) {
       };
       try {
         const result = await fn(client);
+        if (options?.failCommit) {
+          events.push('rollback');
+          throw new Error('commit failed');
+        }
         events.push('commit');
         return result;
       } catch (error) {
-        events.push('rollback');
+        if (!events.includes('rollback')) events.push('rollback');
         throw error;
       }
     },
@@ -100,7 +111,23 @@ function harness(options?: { failSourceUpdate?: boolean; existing?: boolean }) {
       };
     },
   };
-  const service = new CallsService(db as never, access as never, queue as never, recordings as never);
+  const sourceTokens = {
+    async requireProject() {
+      return {
+        id: PROJECT,
+        name: 'Проект',
+        timezone: 'Europe/Moscow',
+        min_call_duration_sec: 180,
+      };
+    },
+  };
+  const service = new CallsService(
+    db as never,
+    access as never,
+    sourceTokens as never,
+    queue as never,
+    recordings as never,
+  );
   return { service, events };
 }
 
@@ -125,7 +152,7 @@ describe('audio fetch is published after commit', () => {
   it('enqueues a new url only after the call row commits', async () => {
     const { service, events } = harness();
     const result = await service.create(
-      ACCOUNT,
+      { account: ACCOUNT },
       PROJECT,
       jsonCall(startedBody({ recording: { type: 'url', url: PUBLIC_URL } })),
     );
@@ -137,7 +164,7 @@ describe('audio fetch is published after commit', () => {
 
   it('enqueues a new file only after the call row commits', async () => {
     const { service, events } = harness();
-    await service.create(ACCOUNT, PROJECT, fileCall(startedBody()));
+    await service.create({ account: ACCOUNT }, PROJECT, fileCall(startedBody()));
     assert.ok(events.indexOf('put') < events.indexOf('commit'));
     assert.ok(events.indexOf('commit') < events.indexOf('enqueue'));
   });
@@ -145,7 +172,7 @@ describe('audio fetch is published after commit', () => {
   it('does not leave a redis message when insert rolls back', async () => {
     const { service, events } = harness({ failSourceUpdate: true });
     await assert.rejects(() =>
-      service.create(ACCOUNT, PROJECT, jsonCall(startedBody({ recording: { type: 'url', url: PUBLIC_URL } }))),
+      service.create({ account: ACCOUNT }, PROJECT, jsonCall(startedBody({ recording: { type: 'url', url: PUBLIC_URL } }))),
     );
     assert.equal(events.includes('rollback'), true);
     assert.equal(events.includes('commit'), false);
@@ -154,7 +181,7 @@ describe('audio fetch is published after commit', () => {
 
   it('does not leave a redis message when a file insert rolls back', async () => {
     const { service, events } = harness({ failSourceUpdate: true });
-    await assert.rejects(() => service.create(ACCOUNT, PROJECT, fileCall(startedBody())));
+    await assert.rejects(() => service.create({ account: ACCOUNT }, PROJECT, fileCall(startedBody())));
     assert.equal(events.includes('rollback'), true);
     assert.equal(events.includes('enqueue'), false);
     assert.equal(events.includes('remove'), true);
@@ -163,7 +190,7 @@ describe('audio fetch is published after commit', () => {
   it('enqueues a replayed recording only after the update commits', async () => {
     const { service, events } = harness({ existing: true });
     const result = await service.create(
-      ACCOUNT,
+      { account: ACCOUNT },
       PROJECT,
       jsonCall(startedBody({ external_id: 'ext-1', recording: { type: 'url', url: PUBLIC_URL } })),
     );
@@ -177,7 +204,7 @@ describe('audio fetch is published after commit', () => {
     const { service, events } = harness({ existing: true, failSourceUpdate: true });
     await assert.rejects(() =>
       service.create(
-        ACCOUNT,
+        { account: ACCOUNT },
         PROJECT,
         fileCall(startedBody({ external_id: 'ext-1' })),
       ),
@@ -192,7 +219,7 @@ describe('audio fetch is published after commit', () => {
     await assert.rejects(
       () =>
         service.create(
-          ACCOUNT,
+          { account: ACCOUNT },
           PROJECT,
           jsonCall(startedBody({ recording: { type: 'url', url: 'http://minio:9000/recordings/a.mp3' } })),
         ),
@@ -201,5 +228,34 @@ describe('audio fetch is published after commit', () => {
     assert.equal(events.includes('insert'), false);
     assert.equal(events.includes('commit'), false);
     assert.equal(events.includes('enqueue'), false);
+  });
+
+  it('enqueues a late recording only after the attach commits', async () => {
+    const { service, events } = harness();
+    const result = await service.attachRecording(
+      { id: 'source-1', project_id: PROJECT },
+      PROJECT,
+      'ext-1',
+      jsonCall({ type: 'url', url: PUBLIC_URL }),
+    );
+    assert.equal(result.status, 202);
+    assert.equal(result.body.processing_status, 'audio_queued');
+    assert.ok(events.indexOf('commit') < events.indexOf('enqueue'));
+  });
+
+  it('does not leave a redis message when attaching a recording rolls back', async () => {
+    const { service, events } = harness({ failCommit: true });
+    await assert.rejects(() =>
+      service.attachRecording(
+        { id: 'source-1', project_id: PROJECT },
+        PROJECT,
+        'ext-1',
+        fileCall({}),
+      ),
+    );
+    assert.equal(events.includes('rollback'), true);
+    assert.equal(events.includes('commit'), false);
+    assert.equal(events.includes('enqueue'), false);
+    assert.equal(events.includes('remove'), true);
   });
 });
