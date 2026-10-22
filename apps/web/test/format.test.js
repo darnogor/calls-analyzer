@@ -18,6 +18,7 @@ import {
   pluginConnectPath,
   parseRoute,
   readCallsQuery,
+  readManagersQuery,
   routeAllowed,
   stageColumns,
   scoreBand,
@@ -54,6 +55,34 @@ test('project day and zoned form time', () => {
   assert.equal(zonedIso('2026-04-28T16:42', 'Europe/Moscow'), '2026-04-28T16:42:00+03:00');
   assert.equal(zonedIso('2026-10-21T12:00', 'America/New_York'), '2026-10-21T12:00:00-04:00');
   assert.equal(zonedIso('2026-01-15T12:00', 'America/New_York'), '2026-01-15T12:00:00-05:00');
+});
+
+test('in-progress and problems show the whole backlog when the menu link has no dates', () => {
+  const zone = 'Europe/Moscow';
+  const today = todayInTimeZone(zone);
+  for (const screen of ['progress', 'problems']) {
+    const state = readCallsQuery('', zone, screen);
+    assert.equal(state.dateFrom, '');
+    assert.equal(state.dateTo, '');
+    assert.equal(state.appliedDefault, false);
+    const api = callsApiSearch(state, screen);
+    assert.equal(api.has('date_from'), false);
+    assert.equal(api.has('date_to'), false);
+    const dated = readCallsQuery('date_from=2026-01-01&date_to=2026-01-02', zone, screen);
+    assert.equal(dated.dateFrom, '2026-01-01');
+    assert.equal(dated.dateTo, '2026-01-02');
+    assert.equal(dated.appliedDefault, false);
+  }
+  const calls = readCallsQuery('', zone, 'calls');
+  assert.equal(calls.appliedDefault, true);
+  assert.equal(calls.dateFrom, today);
+  assert.equal(calls.dateTo, today);
+  const managers = readManagersQuery('', zone);
+  assert.equal(managers.appliedDefault, true);
+  assert.equal(managers.dateFrom, today);
+  assert.equal(managers.dateTo, today);
+  const pages = readFileSync(join(root, 'html/js/pages.js'), 'utf8');
+  assert.match(pages, /readCallsQuery\(ctx\.search, ctx\.timeZone, mode\)/);
 });
 
 test('calls page keeps manager, API receives manager_id', () => {

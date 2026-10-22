@@ -69,6 +69,67 @@ describe('intake payload', () => {
       false,
     );
   });
+
+  it('accepts an absolute http or https recording url on a public host', () => {
+    for (const url of [
+      'https://records.example/a.mp3',
+      'http://example.com:8080/a',
+      'https://cdn.example/a.mp3?x=1',
+      'http://api.example.com/x',
+      'http://8.8.8.8/a.mp3',
+      'http://172.32.5.4/a.mp3',
+      'http://[2001:4860:4860::8888]/a',
+    ]) {
+      const result = validateIntake({
+        started_at: '2026-04-28T16:42:00Z',
+        recording: { type: 'url', url },
+      });
+      assert.equal(result.ok, true, url);
+      if (result.ok) assert.equal(result.value.recording?.url, url);
+    }
+  });
+
+  it('rejects a recording url that is not a public http(s) address', () => {
+    for (const url of [
+      'example.com/file.mp3',
+      '//cdn.example/a.mp3',
+      '/recordings/a.mp3',
+      'javascript:alert(1)',
+      'javascript:http://example.com',
+      'ftp://example.com/a',
+      'file:///etc/passwd',
+      'http://localhost/a',
+      'http://LOCALHOST/a',
+      'http://localhost./a',
+      'http://127.0.0.1/a',
+      'http://127.1/a',
+      'http://2130706433/a',
+      'http://[::1]/a',
+      'http://[::ffff:127.0.0.1]/a',
+      'http://10.1.2.3/a',
+      'http://192.168.1.1/a',
+      'http://172.16.5.4/a',
+      'http://169.254.169.254/latest',
+      'http://[::ffff:169.254.169.254]/',
+      'http://[fe80::1]/a',
+      'http://[fc00::1]/a',
+      'http://0.0.0.0/',
+      'http://minio/bucket',
+      'http://minio:9000/bucket',
+      'http://minio./bucket',
+      'http://postgres/x',
+      'http://redis/x',
+      'http://api/x',
+      'http://API/x',
+      'http://example.com@169.254.169.254/',
+    ]) {
+      assert.equal(
+        validateIntake({ started_at: '2026-04-28T16:42:00Z', recording: { type: 'url', url } }).ok,
+        false,
+        url,
+      );
+    }
+  });
 });
 
 describe('session cookie', () => {
