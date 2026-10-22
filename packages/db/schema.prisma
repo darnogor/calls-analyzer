@@ -1,0 +1,213 @@
+// Physical schema of migrations/0001_core.sql and migrations/0002_source_setup.sql.
+// Those files are applied as-is on a fresh database. This schema does not migrate.
+
+generator client {
+  provider        = "prisma-client"
+  output          = "./src/generated/prisma"
+  moduleFormat    = "cjs"
+  previewFeatures = ["partialIndexes", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [pgcrypto]
+}
+
+/// create unique index accounts_email_lower_uidx on accounts (lower(email));
+model Account {
+  id               String   @id(map: "accounts_pkey") @db.Uuid
+  email            String   @db.Text
+  name             String   @db.Text
+  password_hash    String   @db.Text
+  is_administrator Boolean  @db.Boolean
+  is_active        Boolean  @db.Boolean
+  created_at       DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+  updated_at       DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  memberships ProjectMembership[]
+
+  /// constraint — expression unique index accounts_email_lower_uidx (lower(email))
+  @@map("accounts")
+}
+
+/// constraint projects_min_call_duration_positive check (min_call_duration_sec > 0)
+model Project {
+  id                     String   @id(map: "projects_pkey") @db.Uuid
+  name                   String   @db.Text
+  timezone               String   @default("Europe/Moscow") @db.Text
+  min_call_duration_sec  Int      @default(180) @db.Integer
+  created_at             DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  memberships ProjectMembership[]
+  scorecards  Scorecard[]
+  inputs      ProjectInput[]
+  sources     Source[]
+  managers    Manager[]
+  contacts    Contact[]
+  calls       Call[]
+
+  @@map("projects")
+}
+
+/// constraint project_memberships_role_check check (role in ('lead', 'sales_manager'))
+model ProjectMembership {
+  id         String   @id(map: "project_memberships_pkey") @db.Uuid
+  account_id String   @db.Uuid
+  project_id String   @db.Uuid
+  role       String   @db.Text
+  created_at DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  account Account @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "project_memberships_account_id_fkey")
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "project_memberships_project_id_fkey")
+
+  @@unique([account_id, project_id], map: "project_memberships_account_project_key")
+  @@map("project_memberships")
+}
+
+/// constraint scorecards_version_positive check (version >= 1)
+model Scorecard {
+  project_id  String @db.Uuid
+  version     Int    @db.Integer
+  stages_json Json   @db.JsonB
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scorecards_project_id_fkey")
+
+  @@id([project_id, version], map: "scorecards_pkey")
+  @@map("scorecards")
+}
+
+model ProjectInput {
+  id         String   @id(map: "project_inputs_pkey") @db.Uuid
+  project_id String   @db.Uuid
+  title      String   @db.Text
+  body       String   @db.Text
+  updated_at DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "project_inputs_project_id_fkey")
+
+  @@map("project_inputs")
+}
+
+/// constraint sources_kind_check check (kind in ('manual', 'plugin'))
+model Source {
+  id                    String    @id(map: "sources_pkey") @db.Uuid
+  project_id            String    @db.Uuid
+  kind                  String    @db.Text
+  provider              String?   @db.Text
+  display_name          String    @db.Text
+  token_hash            String?   @db.Text
+  last_intake_at        DateTime? @db.Timestamptz(6)
+  created_at            DateTime  @default(dbgenerated("now()")) @db.Timestamptz(6)
+  setup_code_hash       String?   @db.Text
+  setup_code_expires_at DateTime? @db.Timestamptz(6)
+  setup_code_used_at    DateTime? @db.Timestamptz(6)
+
+  project  Project   @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "sources_project_id_fkey")
+  managers Manager[]
+  contacts Contact[]
+  calls    Call[]
+
+  @@unique([project_id], map: "sources_one_manual_uidx", where: raw("kind = 'manual'"))
+  @@unique([setup_code_hash], map: "sources_setup_code_hash_uidx", where: raw("setup_code_hash is not null"))
+  @@map("sources")
+}
+
+model Manager {
+  id          String   @id(map: "managers_pkey") @db.Uuid
+  project_id  String   @db.Uuid
+  source_id   String   @db.Uuid
+  external_id String?  @db.Text
+  name        String   @db.Text
+  email       String?  @db.Text
+  is_active   Boolean  @db.Boolean
+  created_at  DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+  updated_at  DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "managers_project_id_fkey")
+  source  Source  @relation(fields: [source_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "managers_source_id_fkey")
+  calls   Call[]
+
+  @@unique([project_id, source_id, external_id], map: "managers_external_uidx", where: raw("external_id is not null and external_id <> ''"))
+  @@map("managers")
+}
+
+model Contact {
+  id          String   @id(map: "contacts_pkey") @db.Uuid
+  project_id  String   @db.Uuid
+  source_id   String   @db.Uuid
+  external_id String?  @db.Text
+  name        String   @db.Text
+  company_name String? @db.Text
+  external_url String? @db.Text
+  updated_at  DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "contacts_project_id_fkey")
+  source  Source  @relation(fields: [source_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "contacts_source_id_fkey")
+  calls   Call[]
+
+  @@unique([project_id, source_id, external_id], map: "contacts_external_uidx", where: raw("external_id is not null and external_id <> ''"))
+  @@map("contacts")
+}
+
+/// constraint calls_direction_check check (direction is null or direction in ('in', 'out'))
+/// constraint calls_duration_nonnegative check (duration_sec is null or duration_sec >= 0)
+/// constraint calls_link_status_check check (deal_link_status in ('linked', 'unresolved', 'ambiguous', 'absent'))
+/// constraint calls_status_check check (processing_status in ('recording_pending', 'recording_missing', 'audio_queued', 'audio_fetch', 'skipped_short', 'skipped_no_duration', 'transcribing', 'analyzing', 'completed', 'failed'))
+model Call {
+  id                       String    @id(map: "calls_pkey") @db.Uuid
+  project_id               String    @db.Uuid
+  source_id                String    @db.Uuid
+  external_id              String    @db.Text
+  idempotency_key          String?   @db.Text
+  manager_id               String?   @db.Uuid
+  contact_id               String?   @db.Uuid
+  company_name             String?   @db.Text
+  direction                String?   @db.Text
+  phone                    String?   @db.Text
+  started_at               DateTime  @db.Timestamptz(6)
+  duration_sec             Int?      @db.Integer
+  recording_source_url     String?   @db.Text
+  recording_storage_key    String?   @db.Text
+  recording_content_type   String?   @db.Text
+  deal_external_id         String?   @db.Text
+  deal_name                String?   @db.Text
+  deal_status_at_call_name String?   @db.Text
+  current_deal_status_name String?   @db.Text
+  deal_external_url        String?   @db.Text
+  deal_link_status         String    @db.Text
+  context_json             Json      @default(dbgenerated("'{\"notes\":null,\"fields\":[]}'::jsonb")) @db.JsonB
+  processing_status        String    @db.Text
+  error                    Json?     @db.JsonB
+  created_at               DateTime  @default(dbgenerated("now()")) @db.Timestamptz(6)
+  updated_at               DateTime  @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  project  Project       @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "calls_project_id_fkey")
+  source   Source        @relation(fields: [source_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "calls_source_id_fkey")
+  manager  Manager?      @relation(fields: [manager_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "calls_manager_id_fkey")
+  contact  Contact?      @relation(fields: [contact_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "calls_contact_id_fkey")
+  analysis CallAnalysis?
+
+  @@unique([project_id, source_id, external_id], map: "calls_external_id_key")
+  @@unique([project_id, idempotency_key], map: "calls_idempotency_uidx", where: raw("idempotency_key is not null"))
+  @@index([project_id, started_at(sort: Desc)], map: "calls_project_started_idx")
+  @@index([project_id, processing_status], map: "calls_project_status_idx")
+  @@index([project_id, source_id, deal_external_id], map: "calls_deal_external_idx")
+  @@map("calls")
+}
+
+/// constraint call_analysis_overall_score_check check (overall_score is null or (overall_score >= 0 and overall_score <= 100))
+model CallAnalysis {
+  id              String   @id(map: "call_analysis_pkey") @db.Uuid
+  call_id         String   @unique(map: "call_analysis_call_id_key") @db.Uuid
+  transcript_json Json?    @db.JsonB
+  inputs_json     Json?    @db.JsonB
+  stages_json     Json?    @db.JsonB
+  overall_score   Int?     @db.Integer
+  summary         String?  @db.Text
+  ai_model        String?  @db.Text
+  created_at      DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
+
+  call Call @relation(fields: [call_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "call_analysis_call_id_fkey")
+
+  @@map("call_analysis")
+}

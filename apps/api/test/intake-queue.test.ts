@@ -24,67 +24,104 @@ function startedBody(extra: Record<string, unknown> = {}) {
 
 function harness(options?: { failSourceUpdate?: boolean; existing?: boolean; failCommit?: boolean }) {
   const events: string[] = [];
-  const db = {
-    async query(sql: string) {
-      if (sql.includes("kind = 'manual'")) {
-        events.push('source');
-        return { rows: [{ id: 'source-1' }], rowCount: 1 };
-      }
-      if (sql.includes('recording_storage_key') && sql.includes('external_id')) {
-        events.push('attach-preview');
-        return {
-          rows: [{ id: CALL, processing_status: 'recording_pending', recording_storage_key: null }],
-          rowCount: 1,
-        };
-      }
-      if (sql.includes('external_id')) {
-        events.push('lookup');
-        return options?.existing ? { rows: [{ id: CALL, source_id: 'source-1' }], rowCount: 1 } : { rows: [], rowCount: 0 };
-      }
-      if (sql.includes('processing_status from calls')) {
-        events.push('preview');
-        return { rows: [{ processing_status: 'recording_pending' }], rowCount: 1 };
-      }
-      events.push('query');
-      return { rows: [], rowCount: 0 };
+  const callFind = async (args: { where?: Record<string, unknown>; select?: Record<string, boolean> }) => {
+    const where = args.where ?? {};
+    const select = args.select ?? {};
+    if (where.external_id && select.recording_storage_key) {
+      events.push('attach-preview');
+      return { id: CALL, processing_status: 'recording_pending', recording_storage_key: null };
+    }
+    if (where.external_id || where.idempotency_key) {
+      events.push('lookup');
+      return options?.existing ? { id: CALL, source_id: 'source-1' } : null;
+    }
+    if (select.processing_status && where.id) {
+      events.push('preview');
+      return { processing_status: 'recording_pending' };
+    }
+    events.push('query');
+    return null;
+  };
+  const sourceUpdate = async () => {
+    events.push('update-source');
+    if (options?.failSourceUpdate) {
+      throw new Error('source update failed');
+    }
+    return {};
+  };
+  const txClient = () => ({
+    call: {
+      findFirst: callFind,
+      async create() {
+        events.push('insert');
+        return { id: CALL };
+      },
+      async update() {
+        events.push('update-call');
+        return {};
+      },
     },
-    async tx(fn: (client: { query: (sql: string) => Promise<unknown> }) => Promise<unknown>) {
-      const client = {
-        async query(sql: string) {
-          const label = sql.includes('insert into calls')
-            ? 'insert'
-            : sql.includes('for update')
-              ? 'lock'
-              : sql.includes('update calls')
-                ? 'update-call'
-                : sql.includes('update sources')
-                  ? 'update-source'
-                  : 'sql';
-          events.push(label);
-          if (label === 'update-source' && options?.failSourceUpdate) {
-            throw new Error('source update failed');
-          }
-          if (label === 'lock') {
-            return {
-              rows: [{ id: CALL, processing_status: 'recording_pending', recording_storage_key: null }],
-              rowCount: 1,
-            };
-          }
-          return { rows: [], rowCount: 1 };
-        },
-      };
-      try {
-        const result = await fn(client);
-        if (options?.failCommit) {
-          events.push('rollback');
-          throw new Error('commit failed');
+    source: {
+      async findFirst(args: { where?: { kind?: string } }) {
+        if (args.where?.kind === 'manual') {
+          events.push('source');
+          return { id: 'source-1' };
         }
-        events.push('commit');
-        return result;
-      } catch (error) {
-        if (!events.includes('rollback')) events.push('rollback');
-        throw error;
+        events.push('query');
+        return null;
+      },
+      update: sourceUpdate,
+    },
+    manager: {
+      async findFirst() {
+        return null;
+      },
+      async create() {
+        return {};
+      },
+    },
+    contact: {
+      async create() {
+        return {};
+      },
+    },
+    async $queryRawUnsafe(sql: string) {
+      if (sql.includes('for update')) {
+        events.push('lock');
+        return [{ id: CALL, processing_status: 'recording_pending', recording_storage_key: null }];
       }
+      events.push('sql');
+      return [];
+    },
+  });
+  const db = {
+    client: {
+      call: { findFirst: callFind },
+      source: {
+        async findFirst(args: { where?: { kind?: string } }) {
+          if (args.where?.kind === 'manual') {
+            events.push('source');
+            return { id: 'source-1' };
+          }
+          events.push('query');
+          return null;
+        },
+        update: sourceUpdate,
+      },
+      async $transaction(fn: (tx: ReturnType<typeof txClient>) => Promise<unknown>) {
+        try {
+          const result = await fn(txClient());
+          if (options?.failCommit) {
+            events.push('rollback');
+            throw new Error('commit failed');
+          }
+          events.push('commit');
+          return result;
+        } catch (error) {
+          if (!events.includes('rollback')) events.push('rollback');
+          throw error;
+        }
+      },
     },
   };
   const queue = {

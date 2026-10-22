@@ -55,13 +55,10 @@ export class AuthGuard implements CanActivate {
     if (!accountId) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }
-    const result = await this.db.query<AuthAccount>(
-      `select id, email, name, is_administrator
-       from accounts
-       where id = $1 and is_active = true`,
-      [accountId],
-    );
-    const account = result.rows[0];
+    const account = await this.db.client.account.findFirst({
+      where: { id: accountId, is_active: true },
+      select: { id: true, email: true, name: true, is_administrator: true },
+    });
     if (!account) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }

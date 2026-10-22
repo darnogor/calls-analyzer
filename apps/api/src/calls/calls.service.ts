@@ -1,3 +1,4 @@
+import { Prisma, isUniqueViolation, type TransactionClient } from '@calls/db';
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
@@ -5,7 +6,7 @@ import type { AuthAccount } from '../auth/auth.guard';
 import type { PluginSource } from '../auth/source-tokens';
 import { SourceTokens } from '../auth/source-tokens';
 import { ProjectAccess, type ProjectRecord } from '../access';
-import { Database, isUniqueViolation, type Queryable } from '../db/database';
+import { Database } from '../db/database';
 import { ApiError } from '../errors';
 import { isUuid } from '../ids';
 import { audioFetchMessage, AudioQueue, type AudioFetchMessage } from '../queue/audio-queue';
@@ -183,11 +184,16 @@ export class CallsService {
     if (!isUuid(callId)) {
       throw new ApiError(404, { error: 'call_not_found' });
     }
-    const result = await this.db.query<CallRow>(
-      `${CALL_SELECT} ${CALL_FROM} where c.project_id = $1 and c.id = $2`,
-      [project.id, callId],
-    );
-    const row = result.rows[0];
+    const call = await this.db.client.call.findFirst({
+      where: { project_id: project.id, id: callId },
+      include: {
+        source: { select: { kind: true, provider: true, display_name: true } },
+        manager: { select: { id: true, name: true } },
+        contact: { select: { id: true, name: true, external_url: true } },
+        analysis: { select: { stages_json: true, overall_score: true, summary: true, transcript_json: true } },
+      },
+    });
+    const row = call ? toCallRow(call) : undefined;
     if (!row) {
       throw new ApiError(404, { error: 'call_not_found' });
     }
@@ -203,16 +209,10 @@ export class CallsService {
     if (!isUuid(callId)) {
       throw new ApiError(404, { error: 'call_not_found' });
     }
-    const result = await this.db.query<{
-      recording_storage_key: string | null;
-      recording_content_type: string | null;
-    }>(
-      `select recording_storage_key, recording_content_type
-       from calls
-       where project_id = $1 and id = $2`,
-      [project.id, callId],
-    );
-    const row = result.rows[0];
+    const row = await this.db.client.call.findFirst({
+      where: { project_id: project.id, id: callId },
+      select: { recording_storage_key: true, recording_content_type: true },
+    });
     if (!row) {
       throw new ApiError(404, { error: 'call_not_found' });
     }
@@ -281,17 +281,10 @@ export class CallsService {
       throw new ApiError(404, { error: 'call_not_found' });
     }
     const submitted = readRecordingSubmission(input);
-    const preview = await this.db.query<{
-      id: string;
-      processing_status: string;
-      recording_storage_key: string | null;
-    }>(
-      `select id, processing_status, recording_storage_key
-       from calls
-       where project_id = $1 and source_id = $2 and external_id = $3`,
-      [project.id, source.id, key],
-    );
-    const call = preview.rows[0];
+    const call = await this.db.client.call.findFirst({
+      where: { project_id: project.id, source_id: source.id, external_id: key },
+      select: { id: true, processing_status: true, recording_storage_key: true },
+    });
     if (!call) {
       throw new ApiError(404, { error: 'call_not_found' });
     }
@@ -317,19 +310,17 @@ export class CallsService {
       fetchAudio: AudioFetchMessage['audio'] | null;
     };
     try {
-      result = await this.db.tx(async (client) => {
-        const locked = await client.query<{
-          id: string;
-          processing_status: string;
-          recording_storage_key: string | null;
-        }>(
+      result = await this.db.client.$transaction(async (tx) => {
+        const locked = await tx.$queryRawUnsafe<
+          Array<{ id: string; processing_status: string; recording_storage_key: string | null }>
+        >(
           `select id, processing_status, recording_storage_key
            from calls
            where id = $1
            for update`,
-          [call.id],
+          call.id,
         );
-        const row = locked.rows[0];
+        const row = locked[0];
         if (!row) {
           throw new ApiError(404, { error: 'call_not_found' });
         }
@@ -345,17 +336,17 @@ export class CallsService {
         }
         let fetchAudio: AudioFetchMessage['audio'] | null = null;
         if (submitted.file && uploadedKey && contentType) {
-          await client.query(
-            `update calls
-             set processing_status = 'audio_queued',
-                 recording_storage_key = $2,
-                 recording_content_type = $3,
-                 recording_source_url = null,
-                 error = null,
-                 updated_at = now()
-             where id = $1`,
-            [row.id, uploadedKey, contentType],
-          );
+          await tx.call.update({
+            where: { id: row.id },
+            data: {
+              processing_status: 'audio_queued',
+              recording_storage_key: uploadedKey,
+              recording_content_type: contentType,
+              recording_source_url: null,
+              error: Prisma.DbNull,
+              updated_at: new Date(),
+            },
+          });
           fetchAudio = {
             type: 'object',
             bucket: this.recordings.bucket,
@@ -363,17 +354,17 @@ export class CallsService {
             content_type: contentType,
           };
         } else if (submitted.url) {
-          await client.query(
-            `update calls
-             set processing_status = 'audio_queued',
-                 recording_source_url = $2,
-                 recording_storage_key = null,
-                 recording_content_type = null,
-                 error = null,
-                 updated_at = now()
-             where id = $1`,
-            [row.id, submitted.url],
-          );
+          await tx.call.update({
+            where: { id: row.id },
+            data: {
+              processing_status: 'audio_queued',
+              recording_source_url: submitted.url,
+              recording_storage_key: null,
+              recording_content_type: null,
+              error: Prisma.DbNull,
+              updated_at: new Date(),
+            },
+          });
           fetchAudio = { type: 'url', url: submitted.url };
         } else {
           throw new ApiError(422, { error: 'invalid_payload' });
@@ -415,15 +406,17 @@ export class CallsService {
     if (!key) {
       throw new ApiError(404, { error: 'call_not_found' });
     }
-    return this.db.tx(async (client) => {
-      const locked = await client.query<{ id: string; processing_status: string }>(
+    return this.db.client.$transaction(async (tx) => {
+      const locked = await tx.$queryRawUnsafe<Array<{ id: string; processing_status: string }>>(
         `select id, processing_status
          from calls
          where project_id = $1 and source_id = $2 and external_id = $3
          for update`,
-        [project.id, source.id, key],
+        project.id,
+        source.id,
+        key,
       );
-      const row = locked.rows[0];
+      const row = locked[0];
       if (!row) {
         throw new ApiError(404, { error: 'call_not_found' });
       }
@@ -431,13 +424,11 @@ export class CallsService {
       if (decision.http === 409) {
         throw new ApiError(409, { error: decision.error });
       }
-      await client.query(
-        `update calls
-         set processing_status = 'recording_missing', updated_at = now()
-         where id = $1`,
-        [row.id],
-      );
-      return { id: row.id, processing_status: 'recording_missing' };
+      await tx.call.update({
+        where: { id: row.id },
+        data: { processing_status: 'recording_missing', updated_at: new Date() },
+      });
+      return { id: row.id, processing_status: 'recording_missing' as const };
     });
   }
 
@@ -468,18 +459,16 @@ export class CallsService {
     let byKey: { id: string; source_id: string } | null = null;
     let byExternal: { id: string } | null = null;
     if (idempotencyKey) {
-      const result = await this.db.query<{ id: string; source_id: string }>(
-        `select id, source_id from calls where project_id = $1 and idempotency_key = $2`,
-        [projectId, idempotencyKey],
-      );
-      byKey = result.rows[0] ?? null;
+      byKey = await this.db.client.call.findFirst({
+        where: { project_id: projectId, idempotency_key: idempotencyKey },
+        select: { id: true, source_id: true },
+      });
     }
     if (externalId) {
-      const result = await this.db.query<{ id: string }>(
-        `select id from calls where project_id = $1 and source_id = $2 and external_id = $3`,
-        [projectId, sourceId, externalId],
-      );
-      byExternal = result.rows[0] ?? null;
+      byExternal = await this.db.client.call.findFirst({
+        where: { project_id: projectId, source_id: sourceId, external_id: externalId },
+        select: { id: true },
+      });
     }
     const resolved = resolveExistingCall(sourceId, byKey, byExternal);
     if (!resolved.ok) {
@@ -512,51 +501,41 @@ export class CallsService {
     }
     let fetchAudio: AudioFetchMessage['audio'] | null = null;
     try {
-      fetchAudio = await this.db.tx(async (client) => {
-        const managerId = await upsertManager(client, project.id, sourceId, intake.manager);
-        const contactId = await upsertContact(client, project.id, sourceId, intake.contact);
+      fetchAudio = await this.db.client.$transaction(async (tx) => {
+        const managerId = await upsertManager(tx, project.id, sourceId, intake.manager);
+        const contactId = await upsertContact(tx, project.id, sourceId, intake.contact);
         const deal = storedDeal(intake.deal);
-        await client.query(
-          `insert into calls (
-             id, project_id, source_id, external_id, idempotency_key,
-             manager_id, contact_id, company_name, direction, phone, started_at, duration_sec,
-             recording_source_url, recording_storage_key, recording_content_type,
-             deal_external_id, deal_name, deal_status_at_call_name, current_deal_status_name,
-             deal_external_url, deal_link_status, context_json, processing_status
-           ) values (
-             $1,$2,$3,$4,$5,
-             $6,$7,$8,$9,$10,$11,$12,
-             $13,$14,$15,
-             $16,$17,$18,$19,
-             $20,$21,$22::jsonb,$23
-           )`,
-          [
-            callId,
-            project.id,
-            sourceId,
-            externalId,
-            idempotencyKey ?? null,
-            managerId,
-            contactId,
-            intake.company_name ?? null,
-            intake.direction ?? null,
-            intake.phone ?? null,
-            intake.started_at,
-            intake.duration_sec ?? null,
-            intake.recording?.url ?? null,
-            storageKey,
-            audio?.contentType ?? null,
-            deal.external_id,
-            deal.name,
-            deal.status_at_call_name,
-            deal.current_status_name,
-            deal.external_url,
-            deal.link_status,
-            JSON.stringify(intake.context),
-            processingStatus,
-          ],
-        );
-        await client.query('update sources set last_intake_at = now() where id = $1', [sourceId]);
+        await tx.call.create({
+          data: {
+            id: callId,
+            project_id: project.id,
+            source_id: sourceId,
+            external_id: externalId,
+            idempotency_key: idempotencyKey ?? null,
+            manager_id: managerId,
+            contact_id: contactId,
+            company_name: intake.company_name ?? null,
+            direction: intake.direction ?? null,
+            phone: intake.phone ?? null,
+            started_at: new Date(intake.started_at),
+            duration_sec: intake.duration_sec ?? null,
+            recording_source_url: intake.recording?.url ?? null,
+            recording_storage_key: storageKey,
+            recording_content_type: audio?.contentType ?? null,
+            deal_external_id: deal.external_id,
+            deal_name: deal.name,
+            deal_status_at_call_name: deal.status_at_call_name,
+            current_deal_status_name: deal.current_status_name,
+            deal_external_url: deal.external_url,
+            deal_link_status: deal.link_status,
+            context_json: intake.context as unknown as Prisma.InputJsonValue,
+            processing_status: processingStatus,
+          },
+        });
+        await tx.source.update({
+          where: { id: sourceId },
+          data: { last_intake_at: new Date() },
+        });
         if (file && storageKey && audio) {
           return {
             type: 'object' as const,
@@ -594,11 +573,10 @@ export class CallsService {
     intake: Intake,
     file: UploadedPart | undefined,
   ): Promise<IntakeResult> {
-    const preview = await this.db.query<{ processing_status: string }>(
-      'select processing_status from calls where id = $1',
-      [callId],
-    );
-    const current = preview.rows[0];
+    const current = await this.db.client.call.findFirst({
+      where: { id: callId },
+      select: { processing_status: true },
+    });
     if (!current) {
       throw new ApiError(404, { error: 'call_not_found' });
     }
@@ -606,7 +584,10 @@ export class CallsService {
     const canAttach =
       current.processing_status === 'recording_pending' || current.processing_status === 'recording_missing';
     if (!kind || !canAttach) {
-      await this.db.query('update sources set last_intake_at = now() where id = $1', [sourceId]);
+      await this.db.client.source.update({
+        where: { id: sourceId },
+        data: { last_intake_at: new Date() },
+      });
       return {
         status: 200,
         body: { id: callId, created: false, processing_status: current.processing_status },
@@ -633,20 +614,22 @@ export class CallsService {
       body: IntakeResult;
     };
     try {
-      result = await this.db.tx(async (client) => {
-        const locked = await client.query<{
-          processing_status: string;
-          recording_storage_key: string | null;
-        }>('select processing_status, recording_storage_key from calls where id = $1 for update', [callId]);
-        const status = locked.rows[0]?.processing_status;
+      result = await this.db.client.$transaction(async (tx) => {
+        const locked = await tx.$queryRawUnsafe<
+          Array<{ processing_status: string; recording_storage_key: string | null }>
+        >('select processing_status, recording_storage_key from calls where id = $1 for update', callId);
+        const status = locked[0]?.processing_status;
         if (!status) {
           throw new ApiError(404, { error: 'call_not_found' });
         }
         if (status !== 'recording_pending' && status !== 'recording_missing') {
-          await client.query('update sources set last_intake_at = now() where id = $1', [sourceId]);
+          await tx.source.update({
+            where: { id: sourceId },
+            data: { last_intake_at: new Date() },
+          });
           return {
             attached: false,
-            keptKey: locked.rows[0]?.recording_storage_key ?? null,
+            keptKey: locked[0]?.recording_storage_key ?? null,
             fetchAudio: null,
             body: {
               status: 200,
@@ -656,17 +639,17 @@ export class CallsService {
         }
         let fetchAudio: AudioFetchMessage['audio'] | null = null;
         if (file && storageKey && contentType) {
-          await client.query(
-            `update calls
-             set processing_status = 'audio_queued',
-                 recording_storage_key = $2,
-                 recording_content_type = $3,
-                 recording_source_url = null,
-                 duration_sec = coalesce($4, duration_sec),
-                 updated_at = now()
-             where id = $1`,
-            [callId, storageKey, contentType, intake.duration_sec ?? null],
-          );
+          await tx.call.update({
+            where: { id: callId },
+            data: {
+              processing_status: 'audio_queued',
+              recording_storage_key: storageKey,
+              recording_content_type: contentType,
+              recording_source_url: null,
+              ...(intake.duration_sec != null ? { duration_sec: intake.duration_sec } : {}),
+              updated_at: new Date(),
+            },
+          });
           fetchAudio = {
             type: 'object',
             bucket: this.recordings.bucket,
@@ -674,20 +657,23 @@ export class CallsService {
             content_type: contentType,
           };
         } else if (intake.recording) {
-          await client.query(
-            `update calls
-             set processing_status = 'audio_queued',
-                 recording_source_url = $2,
-                 recording_storage_key = null,
-                 recording_content_type = null,
-                 duration_sec = coalesce($3, duration_sec),
-                 updated_at = now()
-             where id = $1`,
-            [callId, intake.recording.url, intake.duration_sec ?? null],
-          );
+          await tx.call.update({
+            where: { id: callId },
+            data: {
+              processing_status: 'audio_queued',
+              recording_source_url: intake.recording.url,
+              recording_storage_key: null,
+              recording_content_type: null,
+              ...(intake.duration_sec != null ? { duration_sec: intake.duration_sec } : {}),
+              updated_at: new Date(),
+            },
+          });
           fetchAudio = { type: 'url', url: intake.recording.url };
         }
-        await client.query('update sources set last_intake_at = now() where id = $1', [sourceId]);
+        await tx.source.update({
+          where: { id: sourceId },
+          data: { last_intake_at: new Date() },
+        });
         return {
           attached: true,
           keptKey: storageKey,
@@ -714,11 +700,11 @@ export class CallsService {
   }
 
   private async manualSource(projectId: string): Promise<string> {
-    const result = await this.db.query<{ id: string }>(
-      `select id from sources where project_id = $1 and kind = 'manual'`,
-      [projectId],
-    );
-    const sourceId = result.rows[0]?.id;
+    const source = await this.db.client.source.findFirst({
+      where: { project_id: projectId, kind: 'manual' },
+      select: { id: true },
+    });
+    const sourceId = source?.id;
     if (!sourceId) {
       throw new Error(`manual source missing for project ${projectId}`);
     }
@@ -726,13 +712,13 @@ export class CallsService {
   }
 
   private async stageKeys(projectId: string): Promise<string[]> {
-    const stages = await loadCurrentStages(this.db, projectId);
+    const stages = await loadCurrentStages(this.db.client, projectId);
     return stages.map((stage) => stage.key);
   }
 }
 
 async function upsertManager(
-  client: Queryable,
+  tx: TransactionClient,
   projectId: string,
   sourceId: string,
   manager: Intake['manager'],
@@ -741,20 +727,20 @@ async function upsertManager(
     return null;
   }
   if (manager.id) {
-    const found = await client.query<{ id: string }>(
-      'select id from managers where id = $1 and project_id = $2',
-      [manager.id, projectId],
-    );
-    if (!found.rowCount || !found.rows[0]) {
+    const found = await tx.manager.findFirst({
+      where: { id: manager.id, project_id: projectId },
+      select: { id: true },
+    });
+    if (!found) {
       throw new ApiError(422, { error: 'invalid_payload' });
     }
-    return found.rows[0].id;
+    return found.id;
   }
   if (!manager.name) {
     throw new ApiError(422, { error: 'invalid_payload' });
   }
   if (manager.external_id) {
-    const result = await client.query<{ id: string }>(
+    const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
       `insert into managers (id, project_id, source_id, external_id, name, email, is_active)
        values ($1, $2, $3, $4, $5, $6, true)
        on conflict (project_id, source_id, external_id) where external_id is not null and external_id <> ''
@@ -763,21 +749,31 @@ async function upsertManager(
          email = coalesce(excluded.email, managers.email),
          updated_at = now()
        returning id`,
-      [randomUUID(), projectId, sourceId, manager.external_id, manager.name, manager.email ?? null],
+      randomUUID(),
+      projectId,
+      sourceId,
+      manager.external_id,
+      manager.name,
+      manager.email ?? null,
     );
-    return result.rows[0]!.id;
+    return rows[0]!.id;
   }
   const id = randomUUID();
-  await client.query(
-    `insert into managers (id, project_id, source_id, name, email, is_active)
-     values ($1, $2, $3, $4, $5, true)`,
-    [id, projectId, sourceId, manager.name, manager.email ?? null],
-  );
+  await tx.manager.create({
+    data: {
+      id,
+      project_id: projectId,
+      source_id: sourceId,
+      name: manager.name,
+      email: manager.email ?? null,
+      is_active: true,
+    },
+  });
   return id;
 }
 
 async function upsertContact(
-  client: Queryable,
+  tx: TransactionClient,
   projectId: string,
   sourceId: string,
   contact: Intake['contact'],
@@ -786,7 +782,7 @@ async function upsertContact(
     return null;
   }
   if (contact.external_id) {
-    const result = await client.query<{ id: string }>(
+    const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
       `insert into contacts (id, project_id, source_id, external_id, name, external_url)
        values ($1, $2, $3, $4, $5, $6)
        on conflict (project_id, source_id, external_id) where external_id is not null and external_id <> ''
@@ -795,18 +791,84 @@ async function upsertContact(
          external_url = coalesce(excluded.external_url, contacts.external_url),
          updated_at = now()
        returning id`,
-      [randomUUID(), projectId, sourceId, contact.external_id, contact.name, contact.external_url ?? null],
+      randomUUID(),
+      projectId,
+      sourceId,
+      contact.external_id,
+      contact.name,
+      contact.external_url ?? null,
     );
-    return result.rows[0]!.id;
+    return rows[0]!.id;
   }
   // TODO(docs): a manual contact without external_id is not matched to an existing row.
   const id = randomUUID();
-  await client.query(
-    `insert into contacts (id, project_id, source_id, name, external_url)
-     values ($1, $2, $3, $4, $5)`,
-    [id, projectId, sourceId, contact.name, contact.external_url ?? null],
-  );
+  await tx.contact.create({
+    data: {
+      id,
+      project_id: projectId,
+      source_id: sourceId,
+      name: contact.name,
+      external_url: contact.external_url ?? null,
+    },
+  });
   return id;
+}
+
+function toCallRow(call: {
+  id: string;
+  started_at: Date;
+  duration_sec: number | null;
+  direction: string | null;
+  phone: string | null;
+  company_name: string | null;
+  deal_name: string | null;
+  deal_link_status: string;
+  deal_status_at_call_name: string | null;
+  current_deal_status_name: string | null;
+  deal_external_url: string | null;
+  processing_status: string;
+  error: Prisma.JsonValue | null;
+  context_json: Prisma.JsonValue;
+  recording_storage_key: string | null;
+  source: { kind: string; provider: string | null; display_name: string };
+  manager: { id: string; name: string } | null;
+  contact: { id: string; name: string; external_url: string | null } | null;
+  analysis: {
+    stages_json: Prisma.JsonValue | null;
+    overall_score: number | null;
+    summary: string | null;
+    transcript_json: Prisma.JsonValue | null;
+  } | null;
+}): CallRow {
+  return {
+    id: call.id,
+    started_at: call.started_at,
+    duration_sec: call.duration_sec,
+    direction: call.direction,
+    phone: call.phone,
+    company_name: call.company_name,
+    deal_name: call.deal_name,
+    deal_link_status: call.deal_link_status,
+    deal_status_at_call_name: call.deal_status_at_call_name,
+    current_deal_status_name: call.current_deal_status_name,
+    deal_external_url: call.deal_external_url,
+    processing_status: call.processing_status,
+    error: isRecord(call.error) ? call.error : null,
+    context_json: isRecord(call.context_json) ? (call.context_json as CallRow['context_json']) : null,
+    recording_storage_key: call.recording_storage_key,
+    source_kind: call.source.kind,
+    source_provider: call.source.provider,
+    source_display_name: call.source.display_name,
+    manager_id: call.manager?.id ?? null,
+    manager_name: call.manager?.name ?? null,
+    contact_id: call.contact?.id ?? null,
+    contact_name: call.contact?.name ?? null,
+    contact_external_url: call.contact?.external_url ?? null,
+    stages_json: call.analysis?.stages_json ?? null,
+    overall_score: call.analysis?.overall_score ?? null,
+    summary: call.analysis?.summary ?? null,
+    transcript_json: call.analysis?.transcript_json ?? null,
+  };
 }
 
 function storedDeal(deal: Intake['deal']): {

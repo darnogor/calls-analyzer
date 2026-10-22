@@ -21,11 +21,10 @@ export class SourceTokens {
     if (!token) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }
-    const result = await this.db.query<PluginSource>(
-      `select id, project_id from sources where token_hash = $1`,
-      [secretHash(token)],
-    );
-    const source = result.rows[0];
+    const source = await this.db.client.source.findFirst({
+      where: { token_hash: secretHash(token) },
+      select: { id: true, project_id: true },
+    });
     if (!source) {
       throw new ApiError(401, { error: 'unauthenticated' });
     }
@@ -36,11 +35,10 @@ export class SourceTokens {
     if (!isUuid(projectId)) {
       throw new ApiError(404, { error: 'project_not_found' });
     }
-    const result = await this.db.query<ProjectRecord>(
-      `select id, name, timezone, min_call_duration_sec from projects where id = $1`,
-      [projectId],
-    );
-    const project = result.rows[0];
+    const project = await this.db.client.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, name: true, timezone: true, min_call_duration_sec: true },
+    });
     if (!project) {
       throw new ApiError(404, { error: 'project_not_found' });
     }

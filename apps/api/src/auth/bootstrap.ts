@@ -12,10 +12,11 @@ export class BootstrapService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const existing = await this.db.query(
-      'select id from accounts where is_administrator = true limit 1',
-    );
-    if (existing.rowCount) {
+    const existing = await this.db.client.account.findFirst({
+      where: { is_administrator: true },
+      select: { id: true },
+    });
+    if (existing) {
       return;
     }
     // TODO(docs): deploy does not say how the first administrator row is created.
@@ -26,10 +27,15 @@ export class BootstrapService implements OnModuleInit {
       throw new Error('No administrator exists. Set ADMIN_EMAIL, ADMIN_PASSWORD and ADMIN_NAME.');
     }
     const passwordHash = await hashPassword(this.config.adminPassword);
-    await this.db.query(
-      `insert into accounts (id, email, name, password_hash, is_administrator, is_active)
-       values ($1, $2, $3, $4, true, true)`,
-      [randomUUID(), email, name, passwordHash],
-    );
+    await this.db.client.account.create({
+      data: {
+        id: randomUUID(),
+        email,
+        name,
+        password_hash: passwordHash,
+        is_administrator: true,
+        is_active: true,
+      },
+    });
   }
 }

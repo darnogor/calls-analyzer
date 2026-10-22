@@ -1,4 +1,4 @@
-import type { Queryable } from '../db/database';
+import type { PrismaClient } from '@calls/db';
 
 export const STAGE_KEYS = ['opening', 'needs', 'presentation', 'objections', 'closing'] as const;
 
@@ -9,16 +9,13 @@ export type Stage = {
   instruction: string;
 };
 
-export async function loadCurrentStages(db: Queryable, projectId: string): Promise<Stage[]> {
-  const result = await db.query<{ stages_json: unknown }>(
-    `select stages_json
-     from scorecards
-     where project_id = $1
-     order by version desc
-     limit 1`,
-    [projectId],
-  );
-  return readStages(result.rows[0]?.stages_json);
+export async function loadCurrentStages(db: PrismaClient, projectId: string): Promise<Stage[]> {
+  const row = await db.scorecard.findFirst({
+    where: { project_id: projectId },
+    orderBy: { version: 'desc' },
+    select: { stages_json: true },
+  });
+  return readStages(row?.stages_json);
 }
 
 export function readStages(value: unknown): Stage[] {

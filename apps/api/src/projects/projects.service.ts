@@ -1,3 +1,4 @@
+import { Prisma } from '@calls/db';
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthAccount } from '../auth/auth.guard';
@@ -16,19 +17,22 @@ export class ProjectsService {
   constructor(private readonly db: Database) {}
 
   async list(account: AuthAccount): Promise<{ items: ProjectListItem[] }> {
-    const result = account.is_administrator
-      ? await this.db.query<ProjectListItem>(
-          `select id, name, timezone from projects order by created_at asc, id asc`,
-        )
-      : await this.db.query<ProjectListItem>(
-          `select p.id, p.name, p.timezone
-           from projects p
-           join project_memberships m on m.project_id = p.id
-           where m.account_id = $1
-           order by p.created_at asc, p.id asc`,
-          [account.id],
-        );
-    return { items: result.rows };
+    if (account.is_administrator) {
+      const rows = await this.db.client.project.findMany({
+        orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+        select: { id: true, name: true, timezone: true },
+      });
+      return { items: rows };
+    }
+    const memberships = await this.db.client.projectMembership.findMany({
+      where: { account_id: account.id },
+      select: { project: { select: { id: true, name: true, timezone: true, created_at: true } } },
+    });
+    const items = memberships
+      .map((row) => row.project)
+      .sort((left, right) => left.created_at.getTime() - right.created_at.getTime() || left.id.localeCompare(right.id))
+      .map(({ id, name, timezone }) => ({ id, name, timezone }));
+    return { items };
   }
 
   async create(account: AuthAccount, body: unknown): Promise<{
@@ -43,22 +47,31 @@ export class ProjectsService {
     const name = readProjectName(body);
     const id = randomUUID();
     const sourceId = randomUUID();
-    await this.db.tx(async (client) => {
-      await client.query(
-        `insert into projects (id, name, timezone, min_call_duration_sec)
-         values ($1, $2, $3, $4)`,
-        [id, name, DEFAULT_TIMEZONE, DEFAULT_MIN_CALL_DURATION_SEC],
-      );
-      await client.query(
-        `insert into sources (id, project_id, kind, provider, display_name)
-         values ($1, $2, 'manual', null, $3)`,
-        [sourceId, id, MANUAL_SOURCE_NAME],
-      );
-      await client.query(
-        `insert into scorecards (project_id, version, stages_json)
-         values ($1, 1, $2::jsonb)`,
-        [id, JSON.stringify(DEFAULT_STAGES)],
-      );
+    await this.db.client.$transaction(async (tx) => {
+      await tx.project.create({
+        data: {
+          id,
+          name,
+          timezone: DEFAULT_TIMEZONE,
+          min_call_duration_sec: DEFAULT_MIN_CALL_DURATION_SEC,
+        },
+      });
+      await tx.source.create({
+        data: {
+          id: sourceId,
+          project_id: id,
+          kind: 'manual',
+          provider: null,
+          display_name: MANUAL_SOURCE_NAME,
+        },
+      });
+      await tx.scorecard.create({
+        data: {
+          project_id: id,
+          version: 1,
+          stages_json: DEFAULT_STAGES as unknown as Prisma.InputJsonValue,
+        },
+      });
     });
     return {
       id,

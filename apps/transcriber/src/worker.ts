@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createClient, type RedisClientType } from 'redis';
 import { type StageError } from './attempts';
 import { AppConfig } from './config';
-import { Database } from './db';
+import { Prisma } from '@calls/db';
+import { Database, isUniqueViolation } from './db';
 import { type ListRedis, recoverReserved, runFairLoop } from './fair-loop';
 import { handleTranscribe } from './handle-transcribe';
 import { ANALYZE_QUEUE, parseTranscribeMessage, TRANSCRIBE_QUEUE, type AnalyzeMessage } from './messages';
@@ -96,56 +97,60 @@ export class TranscribeWorker implements OnModuleInit, OnModuleDestroy {
     projectId: string,
     callId: string,
   ): Promise<{ processing_status: string; direction: string | null } | null> {
-    const result = await this.db.query<{ processing_status: string; direction: string | null }>(
-      'select processing_status, direction from calls where id = $1 and project_id = $2',
-      [callId, projectId],
-    );
-    return result.rows[0] ?? null;
+    return this.db.client.call.findFirst({
+      where: { id: callId, project_id: projectId },
+      select: { processing_status: true, direction: true },
+    });
   }
 
   private async loadTranscript(callId: string): Promise<Replica[] | null> {
-    const result = await this.db.query<{ transcript_json: unknown }>(
-      'select transcript_json from call_analysis where call_id = $1',
-      [callId],
-    );
-    const value = result.rows[0]?.transcript_json;
+    const row = await this.db.client.callAnalysis.findUnique({
+      where: { call_id: callId },
+      select: { transcript_json: true },
+    });
+    const value = row?.transcript_json;
     return Array.isArray(value) ? (value as Replica[]) : null;
   }
 
   private async markTranscribing(projectId: string, callId: string): Promise<void> {
-    await this.db.query(
-      `update calls
-       set processing_status = 'transcribing', updated_at = now()
-       where id = $1 and project_id = $2
-         and processing_status in ('audio_fetch', 'audio_queued', 'transcribing', 'recording_pending')`,
-      [callId, projectId],
-    );
+    await this.db.client.call.updateMany({
+      where: {
+        id: callId,
+        project_id: projectId,
+        processing_status: { in: ['audio_fetch', 'audio_queued', 'transcribing', 'recording_pending'] },
+      },
+      data: { processing_status: 'transcribing', updated_at: new Date() },
+    });
   }
 
   private async ensureAnalysis(callId: string): Promise<void> {
-    await this.db.query(
-      'insert into call_analysis (id, call_id) values ($1, $2) on conflict (call_id) do nothing',
-      [randomUUID(), callId],
-    );
+    try {
+      await this.db.client.callAnalysis.create({
+        data: { id: randomUUID(), call_id: callId },
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+    }
   }
 
   private async saveTranscript(callId: string, replicas: Replica[]): Promise<void> {
-    await this.db.query(
-      `update call_analysis
-       set transcript_json = $2::jsonb
-       where call_id = $1 and transcript_json is null`,
-      [callId, JSON.stringify(replicas)],
-    );
+    await this.db.client.callAnalysis.updateMany({
+      where: { call_id: callId, transcript_json: { equals: Prisma.DbNull } },
+      data: { transcript_json: replicas as unknown as Prisma.InputJsonValue },
+    });
   }
 
   private async fail(projectId: string, callId: string, error: StageError): Promise<void> {
-    await this.db.query(
-      `update calls
-       set processing_status = 'failed', error = $3::jsonb, updated_at = now()
-       where id = $1 and project_id = $2
-         and processing_status in ('transcribing', 'audio_fetch', 'audio_queued')`,
-      [callId, projectId, JSON.stringify(error)],
-    );
+    await this.db.client.call.updateMany({
+      where: {
+        id: callId,
+        project_id: projectId,
+        processing_status: { in: ['transcribing', 'audio_fetch', 'audio_queued'] },
+      },
+      data: { processing_status: 'failed', error, updated_at: new Date() },
+    });
   }
 
   private async enqueue(message: AnalyzeMessage): Promise<void> {
