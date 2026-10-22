@@ -330,7 +330,7 @@ async function renderAccounts(ctx) {
 
 async function renderCallList(ctx, mode) {
   const tail = mode === 'calls' ? 'calls' : mode;
-  const query = readCallsQuery(ctx.search, ctx.timeZone);
+  const query = readCallsQuery(ctx.search, ctx.timeZone, mode);
   if (query.appliedDefault) {
     navigate(projectPath(ctx.route.projectId, tail, callsPageSearch(query)), { replace: true });
     return { skip: true };
