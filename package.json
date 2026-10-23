@@ -13,6 +13,7 @@
     "test": "npm test --workspaces --if-present",
     "db:up": "docker compose up -d postgres redis minio",
     "db:down": "docker compose down",
+    "dev": "node scripts/local/dev.js",
     "dev:api": "node scripts/local/run-service.js api",
     "dev:media": "node scripts/local/run-service.js media",
     "dev:transcriber": "node scripts/local/run-service.js transcriber",

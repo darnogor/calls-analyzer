@@ -35,16 +35,13 @@ curl -k -c /tmp/calls.cj -H 'content-type: application/json' \
 
 Для правок без пересборки образов Postgres, Redis и MinIO остаются в Docker, а `api`, `media`, `transcriber`, `analyzer` и статический `web` запускаются на машине. Команда `docker compose up --build` выше по-прежнему поднимает весь стек в контейнерах.
 
-Нужны Node.js 22 или новее и Docker. Скопируйте `.env.example` в `.env`. В адресах базы, Redis и MinIO оставляйте `127.0.0.1`: на Windows `localhost` часто уходит в `::1`, и соединение встаёт.
+Нужны Node.js 22 или новее и Docker. В адресах базы, Redis и MinIO оставляйте `127.0.0.1`: на Windows `localhost` часто уходит в `::1`, и соединение встаёт.
 
 ```powershell
-copy .env.example .env
-npm install
-npm run db:up
-scripts\local\build-apps.cmd
-scripts\local\start-apps.cmd
-npm run dev:web
+npm run dev
 ```
+
+`npm run dev` по очереди копирует `.env.example` в `.env`, если `.env` ещё нет, выполняет `npm install`, если нет каталога `node_modules`, затем `npm run db:up`, `scripts\local\build-apps.cmd`, `scripts\local\start-apps.cmd` и `npm run dev:web`. Если страница на `WEB_PORT` и `GET /health` сервиса `api` уже отвечают этим проектом, команда завершается и оставляет их работать. Если один из портов занят другим процессом, команда останавливается до сборки и запуска.
 
 Интерфейс: http://127.0.0.1:3100 . Вход тот же: `admin@example.com` / `admin-password`. Страницу открывайте именно по `127.0.0.1`: cookie сессии стоит с флагом `Secure`, браузер принимает её на этом адресе.
 
