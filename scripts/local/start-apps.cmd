@@ -1,6 +1,7 @@
 @echo off
 set PATH=C:\Program Files\nodejs;%PATH%
 cd /d "%~dp0..\.."
+rem run-service.js records listener pids in .local\pids\<service>.pid
 
 start "calls-api" /D "%cd%" cmd /c "node scripts\local\run-service.js api --dist || pause"
 start "calls-media" /D "%cd%" cmd /c "node scripts\local\run-service.js media --dist || pause"

@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { clearPid, writePid } = require('./pid-file');
 
 require('./load-env.cjs');
 
@@ -42,6 +43,7 @@ if (!spec) {
 
 const useDist = process.argv.includes('--dist');
 process.env.PORT = process.env[spec.portEnv] || spec.port;
+process.env.HOST = '127.0.0.1';
 
 const entry = path.join(root, useDist ? spec.dist : spec.src);
 if (!fs.existsSync(entry)) {
@@ -62,14 +64,24 @@ const child = spawn(process.execPath, args, {
   stdio: 'inherit',
 });
 
+const pids = [process.pid];
+if (child.pid) pids.push(child.pid);
+writePid(name, pids);
+
+function clear() {
+  clearPid(name, pids);
+}
+
 function stop() {
   if (!child.killed) child.kill();
 }
 
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
+process.on('exit', clear);
 
 child.on('exit', (code, signal) => {
+  clear();
   if (signal) process.exit(1);
   process.exit(code ?? 1);
 });

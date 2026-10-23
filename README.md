@@ -41,11 +41,13 @@ curl -k -c /tmp/calls.cj -H 'content-type: application/json' \
 npm run dev
 ```
 
-`npm run dev` по очереди копирует `.env.example` в `.env`, если `.env` ещё нет, выполняет `npm install`, если нет каталога `node_modules`, затем `npm run db:up`, `scripts\local\build-apps.cmd`, `scripts\local\start-apps.cmd` и `npm run dev:web`. Если страница на `WEB_PORT` и `GET /health` сервиса `api` уже отвечают этим проектом, команда завершается и оставляет их работать. Если один из портов занят другим процессом, команда останавливается до сборки и запуска.
+`npm run dev` по очереди копирует `.env.example` в `.env`, если `.env` ещё нет, выполняет `npm install`, если нет каталога `node_modules`, затем `npm run db:up` и `scripts\local\build-apps.cmd`. Перед `scripts\local\start-apps.cmd` команда останавливает контейнеры `api`, `media`, `transcriber`, `analyzer`, `web` и `ingress` (`docker compose stop`, тома не удаляются). `postgres`, `redis` и `minio` остаются. Дальше запускаются процессы на хосте и `npm run dev:web`. Если страница на `WEB_PORT` и `GET /health` сервиса `api` уже отвечают этим проектом, команда завершается и оставляет их работать. Если один из портов занят другим процессом, команда останавливается до сборки и запуска.
 
 Интерфейс: http://127.0.0.1:3100 . Вход тот же: `admin@example.com` / `admin-password`. Страницу открывайте именно по `127.0.0.1`: cookie сессии стоит с флагом `Secure`, браузер принимает её на этом адресе.
 
-`npm run db:up` поднимает только Postgres, Redis и MinIO. Их порты опубликованы на `127.0.0.1` (`5432`, `6379`, `9000`). Контейнеры по-прежнему ходят друг к другу по именам `postgres`, `redis` и `minio`. Если эти порты уже заняты, поменяйте `DATABASE_PORT`, `REDIS_PORT` или `MINIO_PORT` и тот же порт в `DATABASE_URL`, `REDIS_URL` или `S3_ENDPOINT`. После полного compose сначала выполните `npm run db:down` (тома с данными сохраняются), иначе контейнеры приложений и процессы на хосте будут читать одни очереди.
+На хосте `api`, `media`, `transcriber` и `analyzer` слушают `127.0.0.1`. Образ Docker по-прежнему слушает `0.0.0.0`, чтобы healthcheck и ingress внутри compose достучались до процесса.
+
+`npm run db:up` поднимает только Postgres, Redis и MinIO. Их порты опубликованы на `127.0.0.1` (`5432`, `6379`, `9000`). Контейнеры по-прежнему ходят друг к другу по именам `postgres`, `redis` и `minio`. Если эти порты уже заняты, поменяйте `DATABASE_PORT`, `REDIS_PORT` или `MINIO_PORT` и тот же порт в `DATABASE_URL`, `REDIS_URL` или `S3_ENDPOINT`. `npm run dev` останавливает контейнеры приложений перед процессами на хосте, чтобы очередь читал один набор воркеров. Остановить инфраструктуру: `npm run db:down` (тома с данными сохраняются).
 
 В `.env` должны быть заданы:
 
@@ -58,4 +60,4 @@ npm run dev
 
 Без `STT_API_URL` или `STT_PROVIDER` и `STT_API_KEY` распознавание заканчивается `failed`. Без `LLM_BASE_URL`, `LLM_API_KEY` и `LLM_MODEL` так же заканчивается оценка. Сборка из-за пустых значений не останавливается.
 
-Один сервис с перезапуском при правках: `npm run dev:api`, `npm run dev:media`, `npm run dev:transcriber`, `npm run dev:analyzer`. Перед этим нужна та же сборка: пакеты читаются из `dist`. Остановить инфраструктуру: `npm run db:down`. Занятые порты процессов: `powershell -File scripts\local\kill-ports.ps1`.
+Один сервис с перезапуском при правках: `npm run dev:api`, `npm run dev:media`, `npm run dev:transcriber`, `npm run dev:analyzer`. Перед этим нужна та же сборка: пакеты читаются из `dist`. Остановить инфраструктуру: `npm run db:down`. `scripts\local\start-apps.cmd` и `npm run dev:web` записывают pid в `.local/pids`. Остановить только эти процессы: `powershell -File scripts\local\kill-ports.ps1`.

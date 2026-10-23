@@ -25,7 +25,7 @@ async function bootstrap(): Promise<void> {
   app.useGlobalFilters(new ApiExceptionFilter());
   app.enableShutdownHooks();
   const config = app.get(AppConfig);
-  await app.listen(config.port, '0.0.0.0');
+  await app.listen(config.port, process.env.HOST || '0.0.0.0');
 }
 
 void bootstrap();

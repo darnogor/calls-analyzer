@@ -128,6 +128,10 @@ async function main() {
 
   run('npm', ['run', 'db:up'], { shell: true });
   run(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'scripts\\local\\build-apps.cmd']);
+  console.log('остановка контейнеров api, media, transcriber, analyzer, web, ingress');
+  run('docker', ['compose', 'stop', 'api', 'media', 'transcriber', 'analyzer', 'web', 'ingress'], {
+    shell: true,
+  });
   run(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'scripts\\local\\start-apps.cmd']);
   run('npm', ['run', 'dev:web'], { shell: true });
 }

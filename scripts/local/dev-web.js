@@ -1,6 +1,7 @@
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const { clearPid, writePid } = require('./pid-file');
 
 require('./load-env.cjs');
 
@@ -147,6 +148,9 @@ server.on('error', (error) => {
   console.error(error.message);
   process.exit(1);
 });
+
+writePid('web', process.pid);
+process.on('exit', () => clearPid('web', process.pid));
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`интерфейс http://127.0.0.1:${port} -> api http://127.0.0.1:${apiPort}`);
