@@ -143,22 +143,3 @@ export const DEMO_SCORING_PROMPT = [
   'По тексту нельзя оценивать интонацию. Оценивай наблюдаемые действия: уточнение, резюме, признание сомнения, ответ по существу.',
   'Решение клиента и договорённость об оплате выведи отдельно. Не используй оплату после звонка для оценки качества. Итог считает код.',
 ].join('\n');
-
-export function sameStageList(stored: unknown, stages: readonly { key: string; title: string; weight: number; high_score: string; defect_example: string; sample_line: string }[]): boolean {
-  if (!Array.isArray(stored) || stored.length !== stages.length) {
-    return false;
-  }
-  return stages.every((stage, index) => {
-    const item = stored[index];
-    if (!item || typeof item !== 'object') {
-      return false;
-    }
-    const record = item as Record<string, unknown>;
-    return record.key === stage.key
-      && record.title === stage.title
-      && record.weight === stage.weight
-      && record.high_score === stage.high_score
-      && record.defect_example === stage.defect_example
-      && record.sample_line === stage.sample_line;
-  });
-}

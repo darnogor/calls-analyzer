@@ -10,8 +10,7 @@ import {
   DEMO_PRODUCT_FACTS,
   DEMO_SCORING_PROMPT,
   DEMO_STAGES,
-  sameStageList,
-} from '../src/demo/pro-tehnik';
+} from './pro-tehnik-fixture';
 
 describe('PRO.Техник demo data', () => {
   it('loads the lists, the S1–S8 card, and the section 8 prompt', () => {
@@ -41,8 +40,6 @@ describe('PRO.Техник demo data', () => {
     assert.equal(DEMO_SCORING_PROMPT.includes('не утверждён'), true);
     assert.equal(DEMO_SCORING_PROMPT.includes('не not_applicable'), true);
     assert.equal(DEMO_PRODUCT_FACTS.includes('110 000'), true);
-    assert.equal(sameStageList(DEMO_STAGES, DEMO_STAGES), true);
-    assert.equal(sameStageList(DEMO_STAGES.map((stage) => ({ ...stage, weight: 1 })), DEMO_STAGES), false);
     assert.equal(
       qualityScore(DEMO_STAGES.map((stage, index) => ({
         status: 'scored',

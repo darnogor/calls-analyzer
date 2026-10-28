@@ -18,8 +18,7 @@
     "dev:media": "node scripts/local/run-service.js media",
     "dev:transcriber": "node scripts/local/run-service.js transcriber",
     "dev:analyzer": "node scripts/local/run-service.js analyzer",
-    "dev:web": "node scripts/local/dev-web.js",
-    "seed:demo": "npm run seed:demo -w @calls/api"
+    "dev:web": "node scripts/local/dev-web.js"
   },
   "engines": {
     "node": ">=22"
