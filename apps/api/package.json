@@ -5,7 +5,8 @@
     "pretest": "npm run build -w @calls/db",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "tsx --test test/**/*.test.ts"
+    "test": "tsx --test test/**/*.test.ts",
+    "seed:demo": "tsx src/demo/seed.ts"
   },
   "dependencies": {
     "@calls/db": "0.0.0",

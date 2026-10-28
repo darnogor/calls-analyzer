@@ -7,9 +7,9 @@ import { type StageError } from './attempts';
 import { AppConfig } from './config';
 import { Database } from './db';
 import { type ListRedis, recoverReserved, runFairLoop } from './fair-loop';
-import { handleAnalyze, type AnalysisState, type ScoreWrite, type ScriptInput } from './handle-analyze';
+import { handleAnalyze, type AnalysisState, type ScoreWrite, type ScorecardInput } from './handle-analyze';
 import { ANALYZE_QUEUE, parseAnalyzeMessage } from './messages';
-import { readStages, type StageInput } from './score';
+import { readStages } from './score';
 
 const RESERVED = 'calls.analyze.reserved';
 
@@ -68,8 +68,9 @@ export class AnalyzeWorker implements OnModuleInit, OnModuleDestroy {
       newId: () => randomUUID(),
       model: this.config.llmModel,
       load: (projectId, callId) => this.load(projectId, callId),
-      loadStages: (projectId) => this.loadStages(projectId),
-      loadScripts: (projectId) => this.loadScripts(projectId),
+      loadScorecard: (projectId) => this.loadScorecard(projectId),
+      loadPrompt: (projectId) => this.loadPrompt(projectId),
+      loadFacts: (projectId) => this.loadFacts(projectId),
       markAnalyzing: (projectId, callId) => this.markAnalyzing(projectId, callId),
       save: (callId, score) => this.save(callId, score),
       markCompleted: (projectId, callId) => this.markCompleted(projectId, callId),
@@ -91,38 +92,58 @@ export class AnalyzeWorker implements OnModuleInit, OnModuleDestroy {
       where: { id: callId, project_id: projectId },
       select: {
         processing_status: true,
-        analysis: { select: { transcript_json: true, overall_score: true } },
+        company_name: true,
+        manager: { select: { name: true } },
+        contact: { select: { name: true, company_name: true } },
+        analysis: { select: { transcript_json: true, overall_score: true, stages_json: true } },
       },
     });
     if (!call) {
       return null;
     }
+    const company = call.company_name || call.contact?.company_name || null;
     return {
       processing_status: call.processing_status,
       transcript: call.analysis?.transcript_json ?? null,
       overall_score: call.analysis?.overall_score ?? null,
+      analyzed: call.analysis?.stages_json != null,
+      manager: call.manager ? { name: call.manager.name } : null,
+      client: call.contact ? { name: call.contact.name, company } : null,
     };
   }
 
-  private async loadStages(projectId: string): Promise<StageInput[] | null> {
+  private async loadScorecard(projectId: string): Promise<ScorecardInput | null> {
     const card = await this.db.client.scorecard.findFirst({
       where: { project_id: projectId },
       orderBy: { version: 'desc' },
-      select: { stages_json: true },
+      select: { stages_json: true, card_key: true },
     });
     if (!card) {
       return null;
     }
-    return readStages(card.stages_json);
+    const stages = readStages(card.stages_json);
+    if (!stages) {
+      return null;
+    }
+    return { cardKey: card.card_key, stages };
   }
 
-  private async loadScripts(projectId: string): Promise<ScriptInput[]> {
-    const rows = await this.db.client.projectInput.findMany({
+  private async loadPrompt(projectId: string): Promise<string> {
+    const row = await this.db.client.scoringPrompt.findFirst({
       where: { project_id: projectId },
-      orderBy: [{ updated_at: 'asc' }, { id: 'asc' }],
-      select: { title: true, body: true },
+      orderBy: { version: 'desc' },
+      select: { body: true },
     });
-    return rows.map((row) => ({ title: row.title, body: row.body }));
+    return row?.body ?? '';
+  }
+
+  private async loadFacts(projectId: string): Promise<string> {
+    const row = await this.db.client.productFact.findFirst({
+      where: { project_id: projectId },
+      orderBy: { version: 'desc' },
+      select: { body: true },
+    });
+    return row?.body ?? '';
   }
 
   private async markAnalyzing(projectId: string, callId: string): Promise<void> {
@@ -137,25 +158,25 @@ export class AnalyzeWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async save(callId: string, score: ScoreWrite): Promise<boolean> {
-    // Prisma upsert cannot keep the existing score: the update runs only while overall_score is null.
+    // The update runs only while stages are still empty, so a finished analysis is not overwritten.
     const updated = await this.db.client.$executeRawUnsafe(
       `insert into call_analysis (
-         id, call_id, inputs_json, stages_json, summary, overall_score, ai_model, created_at
-       ) values ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, now())
+         id, call_id, inputs_json, stages_json, summary, overall_score, extras_json, ai_model, created_at
+       ) values ($1, $2, $3::jsonb, $4::jsonb, null, $5, $6::jsonb, $7, now())
        on conflict (call_id) do update set
          inputs_json = excluded.inputs_json,
          stages_json = excluded.stages_json,
-         summary = excluded.summary,
          overall_score = excluded.overall_score,
+         extras_json = excluded.extras_json,
          ai_model = excluded.ai_model,
          created_at = now()
-       where call_analysis.overall_score is null`,
+       where call_analysis.stages_json is null`,
       randomUUID(),
       callId,
       JSON.stringify(score.inputs),
       JSON.stringify(score.stages),
-      score.summary,
       score.overall,
+      JSON.stringify(score.extras),
       score.model,
     );
     return updated > 0;

@@ -19,11 +19,11 @@ import { secretHash } from '../src/sources/secrets';
 import { parseNewSource, parseSetupCode } from '../src/sources/validate-source';
 
 const STAGES: Stage[] = [
-  { key: 'opening', title: 'Открытие', weight: 0.15, instruction: 'контакт' },
-  { key: 'needs', title: 'Потребность', weight: 0.3, instruction: 'вопросы' },
-  { key: 'presentation', title: 'Презентация', weight: 0.2, instruction: 'предложение' },
-  { key: 'objections', title: 'Возражения', weight: 0.2, instruction: 'цена' },
-  { key: 'closing', title: 'Закрытие', weight: 0.15, instruction: 'шаг' },
+  { key: 'opening', title: 'Открытие', weight: 15, high_score: 'контакт', defect_example: '', sample_line: '' },
+  { key: 'needs', title: 'Потребность', weight: 30, high_score: 'вопросы', defect_example: '', sample_line: '' },
+  { key: 'presentation', title: 'Презентация', weight: 20, high_score: 'предложение', defect_example: '', sample_line: '' },
+  { key: 'objections', title: 'Возражения', weight: 20, high_score: 'цена', defect_example: '', sample_line: '' },
+  { key: 'closing', title: 'Закрытие', weight: 15, high_score: 'шаг', defect_example: '', sample_line: '' },
 ];
 
 describe('project roles', () => {
@@ -54,7 +54,7 @@ function pgTimeZones(names: readonly string[] = PG_TIME_ZONES) {
 }
 
 describe('analysis settings', () => {
-  it('accepts the five default stages and rejects another set', async () => {
+  it('accepts any unique stage list, including a card that is not the starter', async () => {
     const parsed = await parseSettings({
       timezone: 'Europe/Moscow',
       min_call_duration_sec: 180,
@@ -69,26 +69,34 @@ describe('analysis settings', () => {
       'objections',
       'closing',
     ]);
-    assert.equal((await parseSettings({ timezone: 'Europe/Moscow', min_call_duration_sec: 180, stages: STAGES.slice(0, 4) }, pgTimeZones())).ok, false);
-    const wrong = await parseSettings({
+    const custom = await parseSettings({
       timezone: 'Europe/Moscow',
       min_call_duration_sec: 180,
-      stages: STAGES.map((stage, index) => (index === 0 ? { ...stage, key: 'hello' } : stage)),
+      stages: [
+        { key: 'S1', title: 'Контакт', weight: 5, high_score: 'роль ясна', defect_example: 'нет роли', sample_line: 'добрый день' },
+        { key: 'S2', title: 'Цель', weight: 10, high_score: 'цель своя', defect_example: '', sample_line: '' },
+      ],
     }, pgTimeZones());
-    assert.equal(wrong.ok, false);
-    if (wrong.ok) return;
-    assert.equal(wrong.error, 'stage_set_is_fixed');
+    assert.equal(custom.ok, true);
+    const empty = await parseSettings({
+      timezone: 'Europe/Moscow',
+      min_call_duration_sec: 180,
+      stages: [],
+    }, pgTimeZones());
+    assert.equal(empty.ok, false);
+    if (empty.ok || empty.error !== 'invalid_settings') return;
+    assert.deepEqual(empty.details, ['stages']);
   });
 
-  it('reports a weight total that is not 1 and a bad timezone', async () => {
+  it('reports a non-positive weight and a bad timezone', async () => {
     const weights = await parseSettings({
       timezone: 'Europe/Moscow',
       min_call_duration_sec: 180,
-      stages: STAGES.map((stage, index) => (index === 0 ? { ...stage, weight: 0.5 } : stage)),
+      stages: STAGES.map((stage, index) => (index === 0 ? { ...stage, weight: 0 } : stage)),
     }, pgTimeZones());
     assert.equal(weights.ok, false);
     if (weights.ok || weights.error !== 'invalid_settings') return;
-    assert.deepEqual(weights.details, ['weights_sum_must_be_1']);
+    assert.deepEqual(weights.details, ['stage_weight']);
 
     const zone = await parseSettings({
       timezone: 'Not/AZone',
@@ -156,6 +164,36 @@ describe('manager summary', () => {
     assert.equal(items[1]?.overall_score, null);
     assert.equal(items[1]?.last_call_at, null);
     assert.equal(items[1]?.stages[0]?.score, null);
+  });
+
+  it('leaves not applicable and unobservable stages out of the average', () => {
+    const items = aggregateManagers(
+      [
+        row({
+          id: 'a',
+          started_at: new Date('2026-10-01T09:00:00Z'),
+          overall_score: 80,
+          stages_json: [
+            { key: 'opening', status: 'scored', score: 4 },
+            { key: 'needs', status: 'not_applicable', score: null },
+          ],
+        }),
+        row({
+          id: 'a',
+          started_at: new Date('2026-10-02T09:00:00Z'),
+          overall_score: 60,
+          stages_json: [
+            { key: 'opening', status: 'unobservable', score: null },
+            { key: 'needs', status: 'scored', score: 2 },
+          ],
+        }),
+      ],
+      STAGES,
+      { includeEmail: false, dropInactiveWithoutCalls: true },
+    );
+    assert.equal(items[0]?.stages[0]?.score, 4);
+    assert.equal(items[0]?.stages[1]?.score, 2);
+    assert.equal(items[0]?.overall_score, 70);
   });
 
   it('keeps an empty score at the end for both sort directions', () => {
@@ -260,5 +298,5 @@ function row(overrides: Partial<ManagerCallRow>): ManagerCallRow {
 }
 
 function score(opening: number): unknown {
-  return [{ key: 'opening', score: opening, title: 'Открытие', weight: 0.15, instruction: 'контакт' }];
+  return [{ key: 'opening', score: opening, title: 'Открытие', weight: 15, high_score: 'контакт' }];
 }

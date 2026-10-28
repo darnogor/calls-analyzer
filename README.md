@@ -25,6 +25,8 @@ docker compose up --build
 
 Локальный администратор после старта: `admin@example.com` / `admin-password`. Когда стек здоров, сценарий среза запускается так: `node apps/api/test/e2e.mjs`.
 
+Демо PRO.Техник — повторяемый скрипт, не разовая запись: `npm run seed:demo` при заданном `DATABASE_URL` и уже применённых миграциях. Он загружает проект, 7 менеджеров, 20 клиентов, 9 стадий сделки, карточку `pro_tehnik_v1` и промпт оценки. Стенограммы не создаёт. Повторный запуск не плодит вторые строки.
+
 ```bash
 curl -k -c /tmp/calls.cj -H 'content-type: application/json' \
   -d '{"email":"admin@example.com","password":"admin-password"}' \

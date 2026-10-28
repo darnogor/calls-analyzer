@@ -15,7 +15,7 @@ import {
   safeHttpUrl,
   scoreBand,
   speakerLabel,
-  stageScore,
+  stageEntry,
   translateCallError,
   translateStatus,
 } from './format.js';
@@ -69,6 +69,25 @@ export function scoreHtml(score, extraClass = '') {
   const classes = ['score', text == null ? 'score-empty' : `score-${scoreBand(score)}`, extraClass].filter(Boolean).join(' ');
   if (text == null) return `<span class="${classes}">—</span>`;
   return `<span class="${classes}">${esc(text)}</span>`;
+}
+
+export function stageScoreHtml(stage) {
+  const status = stage && typeof stage === 'object' ? stage.status : undefined;
+  if (status === 'not_applicable' || status === 'unobservable') {
+    return '<span class="score score-dash">—</span>';
+  }
+  const score = stage && typeof stage === 'object' ? stage.score : stage;
+  const text = formatScore(score);
+  if (text == null) return '<span class="score score-empty">—</span>';
+  const value = Number(score);
+  const band = value <= 4 ? pointBand(value) : scoreBand(value);
+  return `<span class="score score-${band}">${esc(text)}</span>`;
+}
+
+function pointBand(value) {
+  if (value >= 4) return 'green';
+  if (value >= 3) return 'yellow';
+  return 'red';
 }
 
 export function personHtml(call) {
@@ -258,7 +277,7 @@ function callRow(call, options) {
   const manager = call.manager?.name ? esc(call.manager.name) : '<span class="muted">—</span>';
   const stage = dealCurrentStage(call.deal);
   const scores = options.showScores
-    ? options.stages.map((column) => `<td class="score-cell">${scoreHtml(stageScore(call.stages, column.key))}</td>`).join('') +
+    ? options.stages.map((column) => `<td class="score-cell">${stageScoreHtml(stageEntry(call.stages, column.key))}</td>`).join('') +
       `<td class="score-cell">${scoreHtml(call.overall_score)}</td>`
     : '';
   const status = options.showStatus ? `<td>${esc(translateStatus(call.processing_status))}</td>` : '';
@@ -284,7 +303,9 @@ export function transcriptHtml(lines) {
       const speaker = line?.speaker === 'client' ? 'client' : line?.speaker === 'manager' ? 'manager' : 'other';
       const start = Number(line?.start);
       const text = typeof line?.text === 'string' ? line.text : '';
-      return `<div class="line" data-line data-start="${Number.isFinite(start) ? start : 0}">
+      const turnId = typeof line?.id === 'string' ? line.id : '';
+      const anchor = turnId ? ` id="turn-${esc(turnId)}"` : '';
+      return `<div class="line" data-line data-start="${Number.isFinite(start) ? start : 0}"${anchor}>
         <button type="button" class="timecode" data-seek-to="${Number.isFinite(start) ? start : 0}">${esc(formatTimecode(start))}</button>
         <span class="speaker speaker-${speaker}">${esc(speakerLabel(line?.speaker))}</span>
         <p class="line-text">${esc(text)}</p>

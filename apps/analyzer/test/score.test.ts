@@ -1,58 +1,110 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { overallScore, parseModelJson, type StageInput } from '../src/score';
+import { coverageRatio, parseModelJson, qualityScore, type StageInput } from '../src/score';
 
 const stages: StageInput[] = [
-  { key: 'opening', title: 'Открытие', weight: 0.15, instruction: 'Начало разговора и установление контакта' },
-  { key: 'needs', title: 'Потребность', weight: 0.3, instruction: 'Выявление ситуации, проблемы и критериев выбора' },
-  { key: 'presentation', title: 'Презентация', weight: 0.2, instruction: 'Конкретность предложения под сказанное клиентом' },
-  { key: 'objections', title: 'Возражения', weight: 0.2, instruction: 'Работа с возражениями, включая стоимость' },
-  { key: 'closing', title: 'Закрытие', weight: 0.15, instruction: 'Зафиксирован ли следующий шаг' },
+  { key: 'S1', title: 'Контакт', weight: 5, high_score: 'роль ясна', defect_example: 'нет роли', sample_line: 'добрый день' },
+  { key: 'S2', title: 'Ситуация', weight: 10, high_score: 'данные есть', defect_example: 'нет техники', sample_line: '' },
 ];
 
-function payload(scores: number[]): string {
-  const body: Record<string, { score: number; comment: string }> = {};
-  stages.forEach((stage, index) => {
-    body[stage.key] = { score: scores[index], comment: `комментарий ${stage.key}` };
+const ids = new Set(['t1', 't2']);
+
+function model(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    stages: [
+      { key: 'S1', status: 'scored', score: 4, reason: 'Роль названа', evidence_ids: ['t1'] },
+      { key: 'S2', status: 'not_applicable', score: null, reason: 'Разбор не про это', evidence_ids: [] },
+    ],
+    flags: [],
+    payment_agreement: { agreed: false, summary: null, evidence_ids: [] },
+    quality_score: 1,
+    ...overrides,
   });
-  return JSON.stringify({ stages: body, summary: 'Клиент заинтересован.', overall: 1 });
 }
 
-describe('overall score', () => {
-  it('rounds the weighted sum in the service', () => {
+describe('quality score', () => {
+  it('uses only scored stages and ignores a model total', () => {
     assert.equal(
-      overallScore([
-        { score: 85, weight: 0.15 },
-        { score: 70, weight: 0.3 },
-        { score: 68, weight: 0.2 },
-        { score: 55, weight: 0.2 },
-        { score: 60, weight: 0.15 },
+      qualityScore([
+        { status: 'scored', score: 4, weight: 5 },
+        { status: 'scored', score: 3, weight: 10 },
+        { status: 'scored', score: 4, weight: 10 },
+        { status: 'scored', score: 3, weight: 15 },
+        { status: 'scored', score: 3, weight: 10 },
+        { status: 'scored', score: 4, weight: 20 },
+        { status: 'scored', score: 2, weight: 15 },
+        { status: 'scored', score: 4, weight: 15 },
       ]),
-      67,
+      84,
+    );
+    assert.equal(
+      qualityScore([
+        { status: 'scored', score: 4, weight: 5 },
+        { status: 'not_applicable', score: null, weight: 10 },
+        { status: 'unobservable', score: null, weight: 20 },
+      ]),
+      100,
+    );
+    assert.equal(qualityScore([{ status: 'not_applicable', score: null, weight: 10 }]), null);
+  });
+
+  it('counts unobservable in coverage and leaves not applicable out', () => {
+    assert.equal(
+      coverageRatio([
+        { status: 'scored', weight: 5 },
+        { status: 'unobservable', weight: 15 },
+        { status: 'not_applicable', weight: 20 },
+      ]),
+      0.25,
+    );
+    assert.equal(coverageRatio([{ status: 'not_applicable', weight: 10 }]), null);
+    assert.equal(
+      coverageRatio([
+        { status: 'scored', weight: 5 },
+        { status: 'scored', weight: 10 },
+      ]),
+      1,
     );
   });
 });
 
 describe('model json', () => {
-  it('accepts an exact stage set and ignores a model total', () => {
-    const parsed = parseModelJson(payload([85, 70, 68, 55, 60]), stages);
+  it('accepts the scorecard keys and keeps flags off the score', () => {
+    const parsed = parseModelJson(model(), stages, ids);
     assert.equal(parsed.ok, true);
-    if (!parsed.ok) {
-      return;
-    }
-    assert.equal(parsed.summary, 'Клиент заинтересован.');
-    assert.equal(parsed.stages[0].instruction, stages[0].instruction);
-    assert.equal(parsed.stages[0].weight, 0.15);
-    assert.equal(overallScore(parsed.stages), 67);
+    if (!parsed.ok) return;
+    assert.equal(parsed.value.stages[0]?.score, 4);
+    assert.equal(parsed.value.stages[1]?.score, null);
+    assert.equal(parsed.value.stages[0]?.high_score, 'роль ясна');
+    const withFlag = parseModelJson(
+      model({ flags: [{ code: 'false_role', evidence_ids: ['t2'] }] }),
+      stages,
+      ids,
+    );
+    assert.equal(withFlag.ok, true);
+    if (!withFlag.ok) return;
+    assert.equal(qualityScore(parsed.value.stages), qualityScore(withFlag.value.stages));
+    assert.equal(qualityScore(parsed.value.stages), 100);
   });
 
-  it('rejects text that is not json, a different key set, an empty summary, and a score outside 0-100', () => {
-    assert.equal(parseModelJson('ответ {"stages":{}}', stages).ok, false);
-    assert.equal(parseModelJson('{"stages":{"opening":{"score":1,"comment":"x"}},"summary":"s"}', stages).ok, false);
-    const missingSummary = JSON.parse(payload([85, 70, 68, 55, 60])) as { summary: string };
-    missingSummary.summary = '   ';
-    assert.equal(parseModelJson(JSON.stringify(missingSummary), stages).ok, false);
-    assert.equal(parseModelJson(payload([85, 70, 68, 55, 101]), stages).ok, false);
-    assert.equal(parseModelJson(payload([85.5, 70, 68, 55, 60]), stages).ok, false);
+  it('rejects a bad status, a score on an excluded stage, a missing turn, and a flag without evidence', () => {
+    assert.equal(parseModelJson('не json', stages, ids).ok, false);
+    const badStatus = JSON.parse(model()) as { stages: Array<{ status: string }> };
+    badStatus.stages[0]!.status = 'skipped';
+    assert.equal(parseModelJson(JSON.stringify(badStatus), stages, ids).ok, false);
+    const scoredNull = JSON.parse(model()) as { stages: Array<{ score: number | null }> };
+    scoredNull.stages[1]!.score = 0;
+    assert.equal(parseModelJson(JSON.stringify(scoredNull), stages, ids).ok, false);
+    const missingTurn = JSON.parse(model()) as { stages: Array<{ evidence_ids: string[] }> };
+    missingTurn.stages[0]!.evidence_ids = ['t9'];
+    assert.equal(parseModelJson(JSON.stringify(missingTurn), stages, ids).ok, false);
+    assert.equal(
+      parseModelJson(model({ flags: [{ code: 'pressure', evidence_ids: [] }] }), stages, ids).ok,
+      false,
+    );
+    assert.equal(
+      parseModelJson(model({ payment_agreement: { agreed: true, summary: 'завтра', evidence_ids: [] } }), stages, ids).ok,
+      false,
+    );
   });
 });

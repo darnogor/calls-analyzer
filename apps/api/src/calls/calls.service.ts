@@ -81,6 +81,7 @@ const CALL_SELECT = `
     ca.stages_json,
     ca.overall_score,
     ca.summary,
+    ca.extras_json,
     ca.transcript_json
 `;
 
@@ -190,7 +191,7 @@ export class CallsService {
         source: { select: { kind: true, provider: true, display_name: true } },
         manager: { select: { id: true, name: true } },
         contact: { select: { id: true, name: true, external_url: true } },
-        analysis: { select: { stages_json: true, overall_score: true, summary: true, transcript_json: true } },
+        analysis: { select: { stages_json: true, overall_score: true, summary: true, extras_json: true, transcript_json: true } },
       },
     });
     const row = call ? toCallRow(call) : undefined;
@@ -837,6 +838,7 @@ function toCallRow(call: {
     stages_json: Prisma.JsonValue | null;
     overall_score: number | null;
     summary: string | null;
+    extras_json: Prisma.JsonValue | null;
     transcript_json: Prisma.JsonValue | null;
   } | null;
 }): CallRow {
@@ -867,6 +869,7 @@ function toCallRow(call: {
     stages_json: call.analysis?.stages_json ?? null,
     overall_score: call.analysis?.overall_score ?? null,
     summary: call.analysis?.summary ?? null,
+    extras_json: call.analysis?.extras_json ?? null,
     transcript_json: call.analysis?.transcript_json ?? null,
   };
 }

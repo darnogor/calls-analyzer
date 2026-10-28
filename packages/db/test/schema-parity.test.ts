@@ -12,7 +12,7 @@ type Column = {
 
 const root = join(__dirname, '../../..');
 const schemaText = readFileSync(join(root, 'packages/db/schema.prisma'), 'utf8');
-const sqlText = ['0001_core.sql', '0002_source_setup.sql']
+const sqlText = ['0001_core.sql', '0002_source_setup.sql', '0003_scorecard_prompt.sql']
   .map((name) => readFileSync(join(root, 'migrations', name), 'utf8'))
   .join('\n');
 

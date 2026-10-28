@@ -28,6 +28,16 @@ export class SettingsController {
     return this.settings.replace(req.account, projectId, body);
   }
 
+  @Put(':projectId/settings/prompt')
+  replacePrompt(@Req() req: AuthedRequest, @Param('projectId') projectId: string, @Body() body: unknown) {
+    return this.settings.replacePrompt(req.account, projectId, body);
+  }
+
+  @Put(':projectId/settings/product-facts')
+  replaceFacts(@Req() req: AuthedRequest, @Param('projectId') projectId: string, @Body() body: unknown) {
+    return this.settings.replaceFacts(req.account, projectId, body);
+  }
+
   @Get(':projectId/filters')
   filtersOf(@Req() req: AuthedRequest, @Param('projectId') projectId: string) {
     return this.filters.get(req.account, projectId);

@@ -1,7 +1,6 @@
 import { ApiError, api } from './api.js';
 import {
   DEFAULT_STAGE_TITLES,
-  STAGE_ORDER,
   callsApiSearch,
   callsPageSearch,
   dealAtCallStage,
@@ -18,8 +17,6 @@ import {
   managersApiSearch,
   managersPageSearch,
   nowDateTimeLocal,
-  percentSumIs100,
-  percentsToWeights,
   pluginConnectPath,
   plural,
   projectPath,
@@ -43,6 +40,7 @@ import {
   pagination,
   panel,
   scoreHtml,
+  stageScoreHtml,
   transcriptHtml,
   unavailable,
 } from './view.js';
@@ -455,20 +453,25 @@ async function renderCall(ctx) {
     ? `<section class="panel">
         <h2>Оценка звонка</h2>
         <div class="overall">${scoreHtml(call.overall_score, 'score-lg')}<span>Итоговая оценка</span></div>
+        ${coverageNote(call)}
         <table class="score-table">
-          <thead><tr><th>Этап</th><th>Оценка</th><th>Комментарий</th></tr></thead>
+          <thead><tr><th>Этап</th><th>Оценка</th><th>Обоснование</th></tr></thead>
           <tbody>${stages
-            .map(
-              (stage) => `<tr>
+            .map((stage) => {
+              const meaning = stage.high_score || stage.instruction || '';
+              return `<tr>
                 <td><div class="stage-title">${esc(stage.title || DEFAULT_STAGE_TITLES[stage.key] || stage.key || '')}${
-                  stage.weight !== null && stage.weight !== undefined ? `<span class="weight">${esc(formatWeight(stage.weight))}</span>` : ''
-                }</div>${stage.instruction ? `<p class="instruction">${esc(stage.instruction)}</p>` : ''}</td>
-                <td class="score-cell">${scoreHtml(stage.score)}</td>
-                <td>${stage.comment ? esc(stage.comment) : '<span class="muted">—</span>'}</td>
-              </tr>`,
-            )
+                  stage.weight !== null && stage.weight !== undefined ? `<span class="weight">вес ${esc(formatWeight(stage.weight))}</span>` : ''
+                }</div>${meaning ? `<p class="instruction">${esc(meaning)}</p>` : ''}${
+                  stage.defect_example ? `<p class="instruction">Пример недочёта: ${esc(stage.defect_example)}</p>` : ''
+                }${stage.sample_line ? `<p class="instruction">Образец смысла, не обязательный текст: ${esc(stage.sample_line)}</p>` : ''}</td>
+                <td class="score-cell">${stageScoreHtml(stage)}</td>
+                <td>${stage.reason ? esc(stage.reason) : '<span class="muted">—</span>'}${evidenceHtml(stage.evidence_ids)}</td>
+              </tr>`;
+            })
             .join('')}</tbody>
         </table>
+        ${flagsAndPayment(call)}
         <h3>Краткий вывод</h3>
         <p>${call.summary ? esc(call.summary) : '<span class="muted">Краткого вывода нет</span>'}</p>
         ${contextHtml(call.context)}
@@ -663,7 +666,7 @@ async function renderManagers(ctx) {
         <td><a class="row-link" href="${esc(href)}">${esc(manager.name || '')}</a>${inactive}</td>
         <td>${esc(manager.calls_count ?? 0)}</td>
         <td>${lastCallCell(manager.last_call_at, ctx.timeZone)}</td>
-        ${stages.map((stage) => `<td class="score-cell">${scoreHtml(stageScoreOf(manager, stage.key))}</td>`).join('')}
+        ${stages.map((stage) => `<td class="score-cell">${stageScoreHtml({ score: stageScoreOf(manager, stage.key) })}</td>`).join('')}
         <td class="score-cell">${scoreHtml(manager.overall_score)}</td>
       </tr>`;
     })
@@ -755,7 +758,7 @@ async function renderManager(ctx) {
     : stageColumns(filters.data?.stages);
   const stats = `<div class="stats">
     ${stat('Звонков', esc(manager.calls_count ?? 0), true)}
-    ${stages.map((stage) => stat(stage.title, scoreHtml(stageScoreOf(manager, stage.key)), true)).join('')}
+    ${stages.map((stage) => stat(stage.title, stageScoreHtml({ score: stageScoreOf(manager, stage.key) }), true)).join('')}
     ${stat('Средний итог', scoreHtml(manager.overall_score), true)}
   </div>`;
   const canRename = ctx.caps.write && manager.source?.kind && manager.source.kind !== 'plugin';
@@ -836,77 +839,149 @@ async function renderSettings(ctx) {
     return missingOrError('Настройки', error);
   }
   if (!ctx.isCurrent()) return { skip: true };
-  const stages = Array.isArray(body?.stages) ? body.stages : [];
-  const byKey = new Map(stages.map((stage) => [stage.key, stage]));
-  const rows = STAGE_ORDER.map((key) => {
-    const stage = byKey.get(key) || { key, title: DEFAULT_STAGE_TITLES[key], weight: '', instruction: '' };
-    const percent = stage.weight === '' || stage.weight === undefined || stage.weight === null
-      ? ''
-      : String(Math.round(Number(stage.weight) * 1000) / 10);
-    return `<fieldset class="stage-edit">
-      <legend>${esc(DEFAULT_STAGE_TITLES[key])}</legend>
-      <label>Название <input name="title:${esc(key)}" value="${esc(stage.title || '')}" required></label>
-      <label>Вес, % <input name="weight:${esc(key)}" type="number" min="0" max="100" step="0.1" value="${esc(percent)}" required></label>
-      <label>Формулировка <textarea name="instruction:${esc(key)}" rows="3">${esc(stage.instruction || '')}</textarea></label>
-    </fieldset>`;
-  }).join('');
+  const stages = Array.isArray(body?.stages) && body.stages.length
+    ? body.stages
+    : [{ key: 'stage_1', title: '', weight: 1, high_score: '', defect_example: '', sample_line: '' }];
+  const rows = stages.map((stage, index) => stageEditor(stage, index)).join('');
+  const cardKey = typeof body?.card_key === 'string' && body.card_key ? body.card_key : '';
   return {
     title: 'Настройки',
     heading: '<h1>Настройки</h1>',
-    html: panel(
-      '',
+    html: `${panel(
+      'Карточка этапов',
       `<form class="stack" data-settings>
+        ${cardKey ? `<p class="muted">Ключ карточки: ${esc(cardKey)}</p>` : ''}
         <label>Часовой пояс <input name="timezone" value="${esc(body?.timezone || ctx.timeZone)}" required></label>
         <label>Порог длительности, секунды <input name="min_call_duration_sec" type="number" min="1" step="1" value="${esc(body?.min_call_duration_sec ?? '')}" required></label>
-        ${rows}
-        <p class="muted">Сумма весов — 100%. Уже оценённые звонки не пересчитываются.</p>
+        <div data-stage-list>${rows}</div>
+        <button class="button button-secondary" type="button" data-add-stage>Добавить этап</button>
+        <p class="muted">Веса — положительные числа, сумма не обязана быть 100. Образец реплики иллюстрирует смысл и не является обязательным текстом. Уже оценённые звонки не пересчитываются.</p>
         <p class="form-error" data-error hidden></p>
         <p class="form-ok" data-saved hidden>Сохранено</p>
-        <button class="button" type="submit">Сохранить</button>
+        <button class="button" type="submit">Сохранить карточку</button>
       </form>`,
-    ),
+    )}
+    ${panel(
+      'Промпт оценки',
+      `<form class="stack" data-prompt>
+        <label>Как оценивать <textarea name="body" rows="12">${esc(body?.scoring_prompt || '')}</textarea></label>
+        <p class="muted">Правила балла, неприменимости и записи. Формат JSON задаёт система, этот текст его не меняет.</p>
+        <p class="form-error" data-error hidden></p>
+        <p class="form-ok" data-saved hidden>Сохранено</p>
+        <button class="button" type="submit">Сохранить промпт</button>
+      </form>`,
+    )}
+    ${panel(
+      'Утверждённые факты продукта',
+      `<form class="stack" data-facts>
+        <label>Факты <textarea name="body" rows="8">${esc(body?.product_facts || '')}</textarea></label>
+        <p class="muted">В оценку уходит только этот текст. Пустое поле значит, что факты не утверждены.</p>
+        <p class="form-error" data-error hidden></p>
+        <p class="form-ok" data-saved hidden>Сохранено</p>
+        <button class="button" type="submit">Сохранить факты</button>
+      </form>`,
+    )}`,
     bind(root) {
-      const form = root.querySelector('[data-settings]');
-      const error = form.querySelector('[data-error]');
-      const saved = form.querySelector('[data-saved]');
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        error.hidden = true;
-        saved.hidden = true;
-        const data = new FormData(form);
-        const percents = STAGE_ORDER.map((key) => data.get(`weight:${key}`));
-        if (!percentSumIs100(percents)) {
-          error.hidden = false;
-          error.textContent = 'Сумма весов должна быть 100%';
-          return;
-        }
-        const duration = Number(data.get('min_call_duration_sec'));
-        if (!Number.isInteger(duration) || duration < 1) {
-          error.hidden = false;
-          error.textContent = 'Порог длительности — целое число больше нуля';
-          return;
-        }
-        const weights = percentsToWeights(percents);
-        const payload = {
-          timezone: String(data.get('timezone') || '').trim(),
-          min_call_duration_sec: duration,
-          stages: STAGE_ORDER.map((key, index) => ({
-            key,
-            title: String(data.get(`title:${key}`) || '').trim(),
-            weight: weights[index],
-            instruction: String(data.get(`instruction:${key}`) || ''),
-          })),
-        };
-        try {
-          await api(`/api/projects/${encodeURIComponent(ctx.route.projectId)}/settings`, { method: 'PUT', body: payload });
-          saved.hidden = false;
-        } catch (err) {
-          if (auth(err)) return;
-          showError(error, err);
-        }
-      });
+      const projectId = ctx.route.projectId;
+      bindScorecard(root, projectId);
+      bindTextSetting(root.querySelector('[data-prompt]'), projectId, 'prompt');
+      bindTextSetting(root.querySelector('[data-facts]'), projectId, 'product-facts');
     },
   };
+}
+
+function stageEditor(stage, index) {
+  const key = stage.key || `stage_${index + 1}`;
+  return `<fieldset class="stage-edit" data-stage>
+    <legend>Этап ${index + 1}</legend>
+    <label>Ключ <input name="key" value="${esc(key)}" required></label>
+    <label>Название <input name="title" value="${esc(stage.title || '')}" required></label>
+    <label>Вес <input name="weight" type="number" min="0.01" step="any" value="${esc(stage.weight ?? '')}" required></label>
+    <label>Что значит высокий балл <textarea name="high_score" rows="2">${esc(stage.high_score || '')}</textarea></label>
+    <label>Пример недочёта <textarea name="defect_example" rows="2">${esc(stage.defect_example || '')}</textarea></label>
+    <label>Образец реплики <textarea name="sample_line" rows="2">${esc(stage.sample_line || '')}</textarea></label>
+    <button class="button button-ghost" type="button" data-remove-stage>Убрать этап</button>
+  </fieldset>`;
+}
+
+function bindScorecard(root, projectId) {
+  const form = root.querySelector('[data-settings]');
+  const list = form.querySelector('[data-stage-list]');
+  const error = form.querySelector('[data-error]');
+  const saved = form.querySelector('[data-saved]');
+  form.querySelector('[data-add-stage]')?.addEventListener('click', () => {
+    const index = list.querySelectorAll('[data-stage]').length;
+    list.insertAdjacentHTML('beforeend', stageEditor({ key: `stage_${index + 1}`, weight: 1 }, index));
+  });
+  list.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-stage]');
+    if (!button) return;
+    const cards = list.querySelectorAll('[data-stage]');
+    if (cards.length < 2) {
+      error.hidden = false;
+      error.textContent = 'В карточке нужен хотя бы один этап';
+      return;
+    }
+    button.closest('[data-stage]')?.remove();
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    error.hidden = true;
+    saved.hidden = true;
+    const duration = Number(new FormData(form).get('min_call_duration_sec'));
+    if (!Number.isInteger(duration) || duration < 1) {
+      error.hidden = false;
+      error.textContent = 'Порог длительности — целое число больше нуля';
+      return;
+    }
+    const stages = [...list.querySelectorAll('[data-stage]')].map((card) => {
+      const fields = new FormData();
+      card.querySelectorAll('input, textarea').forEach((input) => fields.append(input.name, input.value));
+      return {
+        key: String(fields.get('key') || '').trim(),
+        title: String(fields.get('title') || '').trim(),
+        weight: Number(fields.get('weight')),
+        high_score: String(fields.get('high_score') || ''),
+        defect_example: String(fields.get('defect_example') || ''),
+        sample_line: String(fields.get('sample_line') || ''),
+      };
+    });
+    try {
+      await api(`/api/projects/${encodeURIComponent(projectId)}/settings`, {
+        method: 'PUT',
+        body: {
+          timezone: String(new FormData(form).get('timezone') || '').trim(),
+          min_call_duration_sec: duration,
+          stages,
+        },
+      });
+      saved.hidden = false;
+    } catch (err) {
+      if (auth(err)) return;
+      showError(error, err);
+    }
+  });
+}
+
+function bindTextSetting(form, projectId, path) {
+  if (!form) return;
+  const error = form.querySelector('[data-error]');
+  const saved = form.querySelector('[data-saved]');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    error.hidden = true;
+    saved.hidden = true;
+    try {
+      await api(`/api/projects/${encodeURIComponent(projectId)}/settings/${path}`, {
+        method: 'PUT',
+        body: { body: String(new FormData(form).get('body') || '') },
+      });
+      saved.hidden = false;
+    } catch (err) {
+      if (auth(err)) return;
+      showError(error, err);
+    }
+  });
 }
 
 async function renderInputs(ctx) {
@@ -930,7 +1005,7 @@ async function renderInputs(ctx) {
         )
         .join('') || '<p class="muted">Скриптов пока нет.</p>'}
       <form class="stack" data-new-script>
-        <h3>Новый скрипт</h3>
+        <h3>Новый сценарий</h3>
         <label>Название <input name="title" required></label>
         <label>Текст <textarea name="body" rows="4" required></textarea></label>
         <button class="button" type="submit">Добавить скрипт</button>
@@ -959,7 +1034,7 @@ async function renderInputs(ctx) {
   return {
     title: 'Входные данные',
     heading: '<h1>Входные данные</h1>',
-    html: `${panel('Скрипты', scriptHtml)}<p class="form-error" data-error hidden></p>${panel('Источники', sourceHtml)}`,
+    html: `${panel('Сценарий менеджера', `<p class="muted">Текст хранится в проекте и в запрос модели не копируется.</p>${scriptHtml}`)}<p class="form-error" data-error hidden></p>${panel('Источники', sourceHtml)}`,
     bind(root) {
       const error = root.querySelector('[data-error]');
       root.querySelector('[data-new-script]')?.addEventListener('submit', async (event) => {
@@ -1079,9 +1154,38 @@ function lastCallCell(value, timeZone) {
   return esc(formatDateTime(value, timeZone));
 }
 
+function coverageNote(call) {
+  if (call?.preliminary !== true) return '';
+  const coverage = Number(call.coverage);
+  const percent = Number.isFinite(coverage) ? `${Math.round(coverage * 100)}%` : '—';
+  return `<p class="muted">Предварительно: часть этапов не видна в записи. Покрытие ${percent}.</p>`;
+}
+
+function evidenceHtml(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return '';
+  const links = ids
+    .map((id) => `<a href="#turn-${esc(id)}">${esc(id)}</a>`)
+    .join(', ');
+  return `<div class="instruction">Реплики: ${links}</div>`;
+}
+
+function flagsAndPayment(call) {
+  if (!Array.isArray(call?.flags) && !call?.payment_agreement) return '';
+  const flags = Array.isArray(call.flags) ? call.flags : [];
+  const flagList = flags.length
+    ? `<ul class="choice-list">${flags
+        .map((flag) => `<li><span>${esc(flag.code || '')}</span><span>${evidenceHtml(flag.evidence_ids)}</span></li>`)
+        .join('')}</ul>`
+    : '<p class="muted">Нарушений нет</p>';
+  const payment = call.payment_agreement || {};
+  const agreed = payment.agreed === true ? 'Есть' : payment.agreed === false ? 'Нет' : 'Не определена';
+  const summary = payment.summary ? ` · ${esc(payment.summary)}` : '';
+  return `<h3>Нарушения</h3>${flagList}<h3>Договорённость об оплате</h3><p>${agreed}${summary}</p>${evidenceHtml(payment.evidence_ids)}`;
+}
+
 function managerStageColumns(items) {
   const sample = items.find((item) => Array.isArray(item.stages) && item.stages.length);
-  if (!sample) return stageColumns(null);
+  if (!sample) return [];
   return sample.stages.map((stage) => ({
     key: stage.key,
     title: stage.title || DEFAULT_STAGE_TITLES[stage.key] || stage.key,

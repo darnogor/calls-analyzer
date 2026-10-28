@@ -145,6 +145,7 @@ table.grid { width: 100%; border-collapse: collapse; min-width: 860px; }
 .score-yellow { background: var(--yellow-bg); color: var(--yellow-fg); }
 .score-red { background: var(--red-bg); color: var(--red-fg); }
 .score-empty { background: transparent; color: var(--muted); min-width: 0; }
+.score-dash { background: #eef1f4; color: var(--muted); }
 .score-lg { min-width: 72px; min-height: 48px; font-size: 28px; border-radius: 12px; }
 
 .pager, .pager-side { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); }
