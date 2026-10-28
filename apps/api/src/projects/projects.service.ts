@@ -4,7 +4,13 @@ import { randomUUID } from 'node:crypto';
 import type { AuthAccount } from '../auth/auth.guard';
 import { Database } from '../db/database';
 import { ApiError } from '../errors';
-import { DEFAULT_MIN_CALL_DURATION_SEC, DEFAULT_STAGES, DEFAULT_TIMEZONE, MANUAL_SOURCE_NAME } from './defaults';
+import {
+  DEFAULT_MIN_CALL_DURATION_SEC,
+  DEFAULT_SCORING_PROMPT,
+  DEFAULT_STAGES,
+  DEFAULT_TIMEZONE,
+  MANUAL_SOURCE_NAME,
+} from './defaults';
 
 type ProjectListItem = {
   id: string;
@@ -71,6 +77,12 @@ export class ProjectsService {
           version: 1,
           stages_json: DEFAULT_STAGES as unknown as Prisma.InputJsonValue,
         },
+      });
+      await tx.scoringPrompt.create({
+        data: { project_id: id, version: 1, body: DEFAULT_SCORING_PROMPT },
+      });
+      await tx.productFact.create({
+        data: { project_id: id, version: 1, body: '' },
       });
     });
     return {

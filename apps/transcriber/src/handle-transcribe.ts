@@ -2,6 +2,7 @@ import { nextAttempt, stageError } from './attempts';
 import { type AnalyzeMessage, type TranscribeMessage } from './messages';
 import { replicasFromSpeech, type Replica } from './roles';
 import { SpeechTransportError } from './speech';
+import { assignUtteranceIds } from './utterances';
 
 const STOP = new Set(['completed', 'failed', 'skipped_short', 'skipped_no_duration', 'recording_missing']);
 
@@ -63,7 +64,7 @@ export async function handleTranscribe(message: TranscribeMessage, deps: Transcr
       }
       return retryOrFail(message, deps, 'provider_unavailable');
     }
-    const replicas = replicasFromSpeech(body, call.direction);
+    const replicas = assignUtteranceIds(replicasFromSpeech(body, call.direction));
     if (replicas.length === 0) {
       return retryOrFail(message, deps, 'empty_transcript');
     }

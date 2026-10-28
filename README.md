@@ -23,7 +23,7 @@
 docker compose up --build
 ```
 
-Локальный администратор после старта: `admin@example.com` / `admin-password`. Когда стек здоров, сценарий среза запускается так: `node apps/api/test/e2e.mjs`.
+Локальный администратор после старта: `admin@example.com` / `admin-password`. Когда стек здоров, сценарий среза запускается так: `node apps/api/test/e2e.mjs`. Новый проект стартует с общей карточки из пяти этапов.
 
 ```bash
 curl -k -c /tmp/calls.cj -H 'content-type: application/json' \

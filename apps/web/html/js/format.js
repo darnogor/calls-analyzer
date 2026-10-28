@@ -1,20 +1,11 @@
 export const EMPTY_DEAL_STAGE = 'Все стадии';
 export const ALL_MANAGERS = 'Все менеджеры';
 
-export const STAGE_ORDER = ['opening', 'needs', 'presentation', 'objections', 'closing'];
-
-export const DEFAULT_STAGE_TITLES = {
-  opening: 'Открытие',
-  needs: 'Потребность',
-  presentation: 'Презентация',
-  objections: 'Возражения',
-  closing: 'Закрытие',
-};
-
 const CALL_ERRORS = {
   empty_transcript: 'Пустой ответ распознавания',
   transcript_missing: 'Нет транскрипта',
   invalid_model_json: 'Ответ модели не разобран',
+  scorecard_missing: 'Нет карточки этапов',
   provider_unavailable: 'Провайдер распознавания недоступен',
   model_unavailable: 'Модель недоступна',
   audio_network_failure: 'Не удалось скачать запись',
@@ -64,8 +55,7 @@ export function formatScore(score) {
 export function formatWeight(weight) {
   const value = Number(weight);
   if (!Number.isFinite(value)) return '';
-  const percent = Math.round(value * 1000) / 10;
-  return `${Number.isInteger(percent) ? percent : percent}%`;
+  return Number.isInteger(value) ? String(value) : String(Math.round(value * 1000) / 1000);
 }
 
 export function percentSumIs100(percents) {
@@ -142,7 +132,7 @@ export function translateRequestError(body, status) {
   if (code === 'email_taken') return 'Такая почта уже есть';
   if (code === 'last_administrator') return 'Нельзя выключить последнего администратора';
   if (code === 'invalid_settings') return 'Проверьте настройки карточки оценки';
-  if (code === 'stage_set_is_fixed') return 'Набор этапов фиксирован';
+  if (code === 'scorecard_missing') return 'Нет карточки этапов';
   if (code === 'manager_owned_by_plugin') return 'Имя менеджера из плагина меняет сам плагин';
   if (code === 'invalid_input') return 'У скрипта нужны название и текст';
   if (code === 'recording_missing') return 'Записи нет';
@@ -355,24 +345,30 @@ export function toggleSort(currentSort, currentOrder, nextSort) {
   return { sort: nextSort, order: ascFirst ? 'asc' : 'desc' };
 }
 
+export function stageTitle(stage) {
+  const title = stage && typeof stage.title === 'string' ? stage.title.trim() : '';
+  if (title) return title;
+  const key = stage && typeof stage.key === 'string' ? stage.key.trim() : '';
+  return key;
+}
+
 export function stageColumns(filterStages) {
-  if (Array.isArray(filterStages) && filterStages.length > 0) {
-    return filterStages
-      .filter((stage) => stage && typeof stage.key === 'string' && stage.key)
-      .map((stage) => ({
-        key: stage.key,
-        title:
-          typeof stage.title === 'string' && stage.title.trim()
-            ? stage.title.trim()
-            : DEFAULT_STAGE_TITLES[stage.key] || stage.key,
-      }));
-  }
-  return STAGE_ORDER.map((key) => ({ key, title: DEFAULT_STAGE_TITLES[key] }));
+  if (!Array.isArray(filterStages)) return [];
+  return filterStages
+    .filter((stage) => stage && typeof stage.key === 'string' && stage.key)
+    .map((stage) => ({
+      key: stage.key,
+      title: stageTitle(stage),
+    }));
+}
+
+export function stageEntry(stages, key) {
+  if (!Array.isArray(stages)) return null;
+  return stages.find((stage) => stage && stage.key === key) || null;
 }
 
 export function stageScore(stages, key) {
-  if (!Array.isArray(stages)) return null;
-  const found = stages.find((stage) => stage && stage.key === key);
+  const found = stageEntry(stages, key);
   if (!found || found.score === null || found.score === undefined) return null;
   return found.score;
 }

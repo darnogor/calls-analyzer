@@ -7,7 +7,7 @@ import { Prisma, isUniqueViolation } from '@calls/db';
 import { Database } from '../db/database';
 import { ApiError } from '../errors';
 import { loadCurrentStages } from './scorecard';
-import { parseSettings, type SettingsBody } from './validate-settings';
+import { parseSettings, parseTextSetting, type SettingsBody } from './validate-settings';
 
 export function presentMinCallDuration(minCallDurationSec: number): { min_call_duration_sec: number } {
   return { min_call_duration_sec: minCallDurationSec };
@@ -26,13 +26,37 @@ export class SettingsService {
     return presentMinCallDuration(project.min_call_duration_sec);
   }
 
-  async get(account: AuthAccount, projectId: string): Promise<SettingsBody> {
+  async get(account: AuthAccount, projectId: string): Promise<SettingsBody & {
+    card_key: string | null;
+    scoring_prompt: string;
+    product_facts: string;
+  }> {
     const project = await this.access.require(account, projectId, 'settings');
-    const stages = await loadCurrentStages(this.db.client, project.id);
+    const [stages, card, prompt, facts] = await Promise.all([
+      loadCurrentStages(this.db.client, project.id),
+      this.db.client.scorecard.findFirst({
+        where: { project_id: project.id },
+        orderBy: { version: 'desc' },
+        select: { card_key: true },
+      }),
+      this.db.client.scoringPrompt.findFirst({
+        where: { project_id: project.id },
+        orderBy: { version: 'desc' },
+        select: { body: true },
+      }),
+      this.db.client.productFact.findFirst({
+        where: { project_id: project.id },
+        orderBy: { version: 'desc' },
+        select: { body: true },
+      }),
+    ]);
     return {
       timezone: project.timezone,
       min_call_duration_sec: project.min_call_duration_sec,
+      card_key: card?.card_key ?? null,
       stages,
+      scoring_prompt: prompt?.body ?? '',
+      product_facts: facts?.body ?? '',
     };
   }
 
@@ -40,9 +64,6 @@ export class SettingsService {
     const project = await this.access.require(account, projectId, 'settings');
     const parsed = await parseSettings(body, this.db);
     if (!parsed.ok) {
-      if (parsed.error === 'stage_set_is_fixed') {
-        throw new ApiError(422, { error: 'stage_set_is_fixed' });
-      }
       throw new ApiError(422, { error: 'invalid_settings', details: parsed.details });
     }
     const saved = parsed.value;
@@ -70,6 +91,7 @@ export class SettingsService {
             data: {
               project_id: project.id,
               version: version + 1,
+              card_key: saved.card_key,
               stages_json: saved.stages as unknown as Prisma.InputJsonValue,
             },
           });
@@ -83,5 +105,56 @@ export class SettingsService {
       }
     }
     throw new Error('scorecard version conflict');
+  }
+
+  async replacePrompt(account: AuthAccount, projectId: string, body: unknown): Promise<{ body: string }> {
+    const project = await this.access.require(account, projectId, 'settings');
+    const text = parseTextSetting(body);
+    if (text === null) {
+      throw new ApiError(422, { error: 'invalid_settings', details: ['scoring_prompt'] });
+    }
+    await this.appendVersion(project.id, 'scoring_prompts', text);
+    return { body: text };
+  }
+
+  async replaceFacts(account: AuthAccount, projectId: string, body: unknown): Promise<{ body: string }> {
+    const project = await this.access.require(account, projectId, 'settings');
+    const text = parseTextSetting(body);
+    if (text === null) {
+      throw new ApiError(422, { error: 'invalid_settings', details: ['product_facts'] });
+    }
+    await this.appendVersion(project.id, 'product_facts', text);
+    return { body: text };
+  }
+
+  private async appendVersion(projectId: string, table: 'scoring_prompts' | 'product_facts', body: string): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.db.client.$transaction(async (tx) => {
+          const current = await tx.$queryRawUnsafe<Array<{ version: number }>>(
+            `select version
+             from ${table}
+             where project_id = $1
+             order by version desc
+             limit 1
+             for update`,
+            projectId,
+          );
+          const version = (current[0]?.version ?? 0) + 1;
+          if (table === 'scoring_prompts') {
+            await tx.scoringPrompt.create({ data: { project_id: projectId, version, body } });
+          } else {
+            await tx.productFact.create({ data: { project_id: projectId, version, body } });
+          }
+        });
+        return;
+      } catch (error) {
+        if (attempt === 0 && isUniqueViolation(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error(`${table} version conflict`);
   }
 }

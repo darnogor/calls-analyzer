@@ -69,8 +69,8 @@ describe('transcriber pipeline', () => {
     assert.equal(result.action, 'ack');
     assert.equal(calls, 1);
     assert.deepEqual(fake.saved[0], [
-      { speaker: 'manager', start: 0, end: 1, text: 'Добрый день' },
-      { speaker: 'client', start: 1, end: 2, text: 'Здравствуйте' },
+      { id: 't1', speaker: 'manager', start: 0, end: 1, text: 'Добрый день' },
+      { id: 't2', speaker: 'client', start: 1, end: 2, text: 'Здравствуйте' },
     ]);
     assert.deepEqual(fake.analyzed, ['c1']);
   });

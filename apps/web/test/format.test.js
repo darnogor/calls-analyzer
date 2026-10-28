@@ -173,6 +173,11 @@ test('russian plurals', async () => {
   assert.equal(plural(21, 'звонок', 'звонка', 'звонков'), 'звонок');
 });
 
+test('stage columns follow the scorecard and do not invent five keys', () => {
+  assert.deepEqual(stageColumns([]), []);
+  assert.deepEqual(stageColumns(undefined), []);
+});
+
 test('stage columns use filter titles and leave weight and instruction off the column', () => {
   assert.deepEqual(
     stageColumns([
@@ -181,7 +186,7 @@ test('stage columns use filter titles and leave weight and instruction off the c
     ]),
     [
       { key: 'opening', title: 'Приветствие' },
-      { key: 'needs', title: 'Потребность' },
+      { key: 'needs', title: 'needs' },
     ],
   );
 });

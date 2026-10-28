@@ -25,6 +25,7 @@ export type CallRow = {
   stages_json: unknown;
   overall_score: number | null;
   summary: string | null;
+  extras_json: unknown;
   transcript_json: unknown;
 };
 
@@ -64,6 +65,7 @@ export function presentCall(row: CallRow): Record<string, unknown> {
     stages: completed ? cardStages(row.stages_json) : null,
     overall_score: completed ? row.overall_score : null,
     summary: completed ? row.summary : null,
+    ...completedExtras(completed ? row.extras_json : null),
     transcript: completed ? (row.transcript_json ?? null) : null,
     has_recording: Boolean(row.recording_storage_key),
   };
@@ -132,34 +134,60 @@ function presentDeal(row: CallRow, mode: 'list' | 'card'): Record<string, unknow
   return linked;
 }
 
-function listStages(value: unknown): { key: string; score: number | null }[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((stage) => {
-    const record = asRecord(stage);
+function listStages(value: unknown): { key: string; score: number | null; status: string | null }[] {
+  return stageRecords(value).map((record) => {
+    const status = typeof record.status === 'string' ? record.status : null;
+    const hidden = status === 'not_applicable' || status === 'unobservable';
     return {
-      key: typeof record?.key === 'string' ? record.key : '',
-      score: typeof record?.score === 'number' ? record.score : null,
+      key: typeof record.key === 'string' ? record.key : '',
+      score: hidden ? null : typeof record.score === 'number' ? record.score : null,
+      status,
     };
   });
 }
 
 function cardStages(value: unknown): Record<string, unknown>[] {
+  return stageRecords(value).map((record) => ({
+    key: record.key ?? null,
+    title: record.title ?? null,
+    weight: record.weight ?? null,
+    high_score: record.high_score ?? null,
+    defect_example: record.defect_example ?? null,
+    sample_line: record.sample_line ?? null,
+    instruction: record.instruction ?? null,
+    status: record.status ?? null,
+    score: record.score ?? null,
+    reason: record.reason ?? record.comment ?? null,
+    evidence_ids: stringList(record.evidence_ids),
+  }));
+}
+
+function stageRecords(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((stage) => {
-    const record = asRecord(stage) ?? {};
-    return {
-      key: record.key ?? null,
-      title: record.title ?? null,
-      weight: record.weight ?? null,
-      instruction: record.instruction ?? null,
-      score: record.score ?? null,
-      comment: record.comment ?? null,
-    };
-  });
+  return value.map((stage) => asRecord(stage) ?? {});
+}
+
+function completedExtras(value: unknown): Record<string, unknown> {
+  const record = asRecord(value);
+  if (!record) {
+    return {};
+  }
+  const coverage = typeof record.coverage === 'number' && Number.isFinite(record.coverage) ? record.coverage : null;
+  return {
+    coverage,
+    preliminary: record.preliminary === true,
+    flags: Array.isArray(record.flags) ? record.flags : [],
+    payment_agreement: asRecord(record.payment_agreement),
+  };
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === 'string' && item !== '');
 }
 
 function iso(value: Date | string): string {

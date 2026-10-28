@@ -253,6 +253,7 @@ function row(overrides: Partial<CallRow>): CallRow {
     stages_json: null,
     overall_score: null,
     summary: null,
+    extras_json: null,
     transcript_json: null,
     ...overrides,
   };

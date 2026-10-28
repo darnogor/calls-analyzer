@@ -17,7 +17,7 @@ export class FiltersService {
     stages: { key: string; title: string }[];
   }> {
     const project = await this.access.require(account, projectId, 'read');
-    const [managers, deals, stages] = await Promise.all([
+    const [managers, deals, directory, stages] = await Promise.all([
       this.db.client.manager.findMany({
         where: { project_id: project.id, is_active: true },
         select: { id: true, name: true },
@@ -30,13 +30,26 @@ export class FiltersService {
            and btrim(current_deal_status_name) <> ''`,
         [project.id],
       ),
+      this.db.client.dealStage.findMany({
+        where: { project_id: project.id },
+        orderBy: [{ position: 'asc' }, { name: 'asc' }],
+        select: { name: true },
+      }),
       loadCurrentStages(this.db.client, project.id),
     ]);
+    const listed = new Set(directory.map((stage) => stage.name));
+    const extra = deals.rows
+      .map((row) => row.status)
+      .filter((status) => !listed.has(status))
+      .sort((left, right) => left.localeCompare(right, 'ru'));
+    const dealStatuses = directory.length > 0
+      ? [...directory.map((stage) => stage.name), ...extra]
+      : deals.rows.map((row) => row.status).sort((left, right) => left.localeCompare(right, 'ru'));
     return {
       managers: [...managers]
         .sort((left, right) => left.name.localeCompare(right.name, 'ru') || left.id.localeCompare(right.id))
         .map((row) => ({ id: row.id, name: row.name })),
-      deal_statuses: deals.rows.map((row) => row.status).sort((left, right) => left.localeCompare(right, 'ru')),
+      deal_statuses: dealStatuses,
       stages: stages.map((stage) => ({ key: stage.key, title: stage.title })),
     };
   }

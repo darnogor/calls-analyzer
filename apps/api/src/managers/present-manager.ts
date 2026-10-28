@@ -46,6 +46,9 @@ export function stageScore(stages: unknown, key: string): number | null {
     if (record.key !== key) {
       continue;
     }
+    if (record.status === 'not_applicable' || record.status === 'unobservable') {
+      return null;
+    }
     return asNumber(record.score);
   }
   return null;

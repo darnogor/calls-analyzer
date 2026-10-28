@@ -502,14 +502,14 @@ const lowId = randomUUID();
 const highId = randomUUID();
 const failedId = randomUUID();
 const stagesLow = [
-  { key: 'opening', title: 'Открытие', weight: 0.15, instruction: 'Начало разговора и установление контакта', score: 85, comment: 'Хорошо' },
-  { key: 'needs', title: 'Потребность', weight: 0.3, instruction: 'Выявление ситуации, проблемы и критериев выбора', score: 70, comment: 'Нормально' },
-  { key: 'presentation', title: 'Презентация', weight: 0.2, instruction: 'Конкретность предложения под сказанное клиентом', score: 68, comment: 'Общо' },
-  { key: 'objections', title: 'Возражения', weight: 0.2, instruction: 'Работа с возражениями, включая стоимость', score: 40, comment: 'Слабо' },
-  { key: 'closing', title: 'Закрытие', weight: 0.15, instruction: 'Зафиксирован ли следующий шаг', score: 60, comment: 'Нет шага' },
+  { key: 'opening', title: 'Открытие', weight: 15, high_score: 'Начало разговора и установление контакта', status: 'scored', score: 3, reason: 'Хорошо', evidence_ids: ['t1'] },
+  { key: 'needs', title: 'Потребность', weight: 30, high_score: 'Выявление ситуации, проблемы и критериев выбора', status: 'scored', score: 3, reason: 'Нормально', evidence_ids: ['t1'] },
+  { key: 'presentation', title: 'Презентация', weight: 20, high_score: 'Конкретность предложения под сказанное клиентом', status: 'scored', score: 2, reason: 'Общо', evidence_ids: ['t1'] },
+  { key: 'objections', title: 'Возражения', weight: 20, high_score: 'Работа с возражениями, включая стоимость', status: 'scored', score: 1, reason: 'Слабо', evidence_ids: ['t1'] },
+  { key: 'closing', title: 'Закрытие', weight: 15, high_score: 'Зафиксирован ли следующий шаг', status: 'scored', score: 2, reason: 'Нет шага', evidence_ids: ['t1'] },
 ];
 const stagesHigh = stagesLow.map((stage) =>
-  stage.key === 'objections' ? { ...stage, score: 90, comment: 'Сильно' } : stage,
+  stage.key === 'objections' ? { ...stage, score: 4, reason: 'Сильно' } : stage,
 );
 function insertCompleted(id, externalId, started, company, dealStatus, stages, overall) {
   psql(
@@ -548,7 +548,8 @@ assert.equal(completed.body.total, 2);
 assert.equal(completed.body.items[0].id, lowId);
 assert.deepEqual(completed.body.items[0].stages.find((stage) => stage.key === 'objections'), {
   key: 'objections',
-  score: 40,
+  status: 'scored',
+  score: 1,
 });
 assert.equal(completed.body.items[0].overall_score, 67);
 assert.equal(completed.body.items[0].deal.status_name, 'Переговоры');
@@ -586,9 +587,11 @@ assert.equal(full.body.processing_status, 'completed');
 assert.equal(full.body.summary, 'Краткий вывод');
 assert.equal(full.body.transcript[0].speaker, 'manager');
 const objections = full.body.stages.find((stage) => stage.key === 'objections');
-assert.equal(objections.instruction, 'Работа с возражениями, включая стоимость');
-assert.equal(objections.weight, 0.2);
-assert.equal(objections.score, 40);
+assert.equal(objections.status, 'scored');
+assert.equal(objections.high_score, 'Работа с возражениями, включая стоимость');
+assert.equal(objections.weight, 20);
+assert.equal(objections.score, 1);
+assert.equal(objections.reason, 'Слабо');
 
 const problems = await api(`/api/projects/${projectId}/calls?view=problems`, { cookie: admin });
 assert.equal(problems.body.items.some((item) => item.id === failedId), true);

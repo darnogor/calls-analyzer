@@ -1,24 +1,55 @@
 import { nextAttempt, stageError } from './attempts';
 import { type AnalyzeMessage } from './messages';
 import { SYSTEM_PROMPT } from './prompt';
-import { overallScore, parseModelJson, type StageInput, type StageScore } from './score';
+import {
+  coverageRatio,
+  isPreliminary,
+  parseModelJson,
+  qualityScore,
+  type PaymentAgreement,
+  type StageInput,
+  type StageResult,
+  type ViolationFlag,
+} from './score';
+import { transcriptTurns } from './transcript';
 
 const STOP = new Set(['completed', 'failed', 'skipped_short', 'skipped_no_duration', 'recording_missing']);
 const DONT_REOPEN = new Set(['failed', 'skipped_short', 'skipped_no_duration', 'recording_missing']);
 
-export type ScriptInput = { title: string; body: string };
+export type ScorecardInput = {
+  cardKey: string | null;
+  stages: StageInput[];
+};
 
-export type AnalysisState = {
+export type CallParties = {
+  manager: { name: string } | null;
+  client: { name: string; company: string | null } | null;
+};
+
+export type AnalysisState = CallParties & {
   processing_status: string;
   transcript: unknown;
   overall_score: number | null;
+  analyzed: boolean;
 };
 
 export type ScoreWrite = {
-  inputs: ScriptInput[];
-  stages: StageScore[];
-  summary: string;
-  overall: number;
+  inputs: {
+    card_key: string | null;
+    scoring_prompt: string;
+    product_facts: string;
+    manager: { name: string } | null;
+    client: { name: string; company: string | null } | null;
+  };
+  stages: StageResult[];
+  summary: string | null;
+  overall: number | null;
+  extras: {
+    coverage: number | null;
+    preliminary: boolean;
+    flags: ViolationFlag[];
+    payment_agreement: PaymentAgreement;
+  };
   model: string;
 };
 
@@ -34,8 +65,9 @@ export type AnalyzeDeps = {
   newId: () => string;
   model: string;
   load: (projectId: string, callId: string) => Promise<AnalysisState | null>;
-  loadStages: (projectId: string) => Promise<StageInput[] | null>;
-  loadScripts: (projectId: string) => Promise<ScriptInput[]>;
+  loadScorecard: (projectId: string) => Promise<ScorecardInput | null>;
+  loadPrompt: (projectId: string) => Promise<string>;
+  loadFacts: (projectId: string) => Promise<string>;
   markAnalyzing: (projectId: string, callId: string) => Promise<void>;
   save: (callId: string, score: ScoreWrite) => Promise<boolean>;
   markCompleted: (projectId: string, callId: string) => Promise<void>;
@@ -48,7 +80,7 @@ export async function handleAnalyze(message: AnalyzeMessage, deps: AnalyzeDeps):
   if (!state) {
     return retryOrFail(message, deps, 'transcript_missing');
   }
-  if (state.overall_score !== null && state.overall_score !== undefined) {
+  if (state.analyzed) {
     if (!DONT_REOPEN.has(state.processing_status)) {
       await deps.markCompleted(message.project_id, message.call_id);
     }
@@ -59,23 +91,34 @@ export async function handleAnalyze(message: AnalyzeMessage, deps: AnalyzeDeps):
   }
   try {
     await deps.markAnalyzing(message.project_id, message.call_id);
-    if (!Array.isArray(state.transcript) || state.transcript.length === 0) {
+    const turns = transcriptTurns(state.transcript);
+    if (!turns) {
       return retryOrFail(message, deps, 'transcript_missing');
     }
-    const stages = await deps.loadStages(message.project_id);
-    if (!stages) {
-      return retryOrFail(message, deps, 'model_unavailable');
+    const scorecard = await deps.loadScorecard(message.project_id);
+    if (!scorecard || scorecard.stages.length === 0) {
+      return retryOrFail(message, deps, 'scorecard_missing');
     }
-    const scripts = await deps.loadScripts(message.project_id);
+    const scoringPrompt = await deps.loadPrompt(message.project_id);
+    const productFacts = await deps.loadFacts(message.project_id);
+    const parties: CallParties = { manager: state.manager, client: state.client };
     const payload = {
-      scripts,
-      transcript: state.transcript,
-      stages: stages.map((stage) => ({
-        key: stage.key,
-        title: stage.title,
-        weight: stage.weight,
-        instruction: stage.instruction,
-      })),
+      scorecard: {
+        key: scorecard.cardKey,
+        stages: scorecard.stages.map((stage) => ({
+          key: stage.key,
+          title: stage.title,
+          weight: stage.weight,
+          high_score: stage.high_score,
+          defect_example: stage.defect_example,
+          sample_line: stage.sample_line,
+        })),
+      },
+      prompt: scoringPrompt,
+      product_facts: productFacts,
+      manager: parties.manager,
+      client: parties.client,
+      transcript: turns,
     };
     let result: { model: string; content: string };
     try {
@@ -90,20 +133,33 @@ export async function handleAnalyze(message: AnalyzeMessage, deps: AnalyzeDeps):
       console.error('analyze', message.call_id, error);
       return retryOrFail(message, deps, 'model_unavailable');
     }
-    const parsed = parseModelJson(result.content, stages);
+    const ids = new Set(turns.map((turn) => turn.id));
+    const parsed = parseModelJson(result.content, scorecard.stages, ids);
     if (!parsed.ok) {
       return retryOrFail(message, deps, 'invalid_model_json');
     }
-    const overall = overallScore(parsed.stages);
-    if (!Number.isInteger(overall) || overall < 0 || overall > 100) {
+    const overall = qualityScore(parsed.value.stages);
+    if (overall !== null && (!Number.isInteger(overall) || overall < 0 || overall > 100)) {
       return retryOrFail(message, deps, 'invalid_model_json');
     }
     const model = result.model.trim() || deps.model;
     const wrote = await deps.save(message.call_id, {
-      inputs: scripts,
-      stages: parsed.stages,
-      summary: parsed.summary,
+      inputs: {
+        card_key: scorecard.cardKey,
+        scoring_prompt: scoringPrompt,
+        product_facts: productFacts,
+        manager: parties.manager,
+        client: parties.client,
+      },
+      stages: parsed.value.stages,
+      summary: parsed.value.summary,
       overall,
+      extras: {
+        coverage: coverageRatio(parsed.value.stages),
+        preliminary: isPreliminary(parsed.value.stages),
+        flags: parsed.value.flags,
+        payment_agreement: parsed.value.payment_agreement,
+      },
       model,
     });
     if (wrote) {

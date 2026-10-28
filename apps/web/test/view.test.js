@@ -50,6 +50,40 @@ test('calls table uses the current deal stage and score colors', () => {
   assert.match(html, /score-yellow">70/);
   assert.match(html, /score-red">59/);
   assert.match(html, /score-green">80/);
+  const points = callsTable({
+    items: [{
+      ...call,
+      stages: [
+        { key: 'S1', status: 'scored', score: 4 },
+        { key: 'S2', status: 'scored', score: 3 },
+        { key: 'S3', status: 'scored', score: 2 },
+        { key: 'S4', status: 'not_applicable', score: null },
+        { key: 'S5', status: 'unobservable', score: null },
+      ],
+      overall_score: 60,
+    }],
+    stages: [
+      { key: 'S1', title: 'Контакт' },
+      { key: 'S2', title: 'Ситуация' },
+      { key: 'S3', title: 'Цель' },
+      { key: 'S4', title: 'Барьеры' },
+      { key: 'S5', title: 'Путь' },
+    ],
+    timeZone: 'Europe/Moscow',
+    projectId: 'p1',
+    showManager: true,
+    showScores: true,
+    showStatus: false,
+    showError: false,
+    sort: 'started_at',
+    order: 'desc',
+  });
+  assert.match(points, /score-green">4/);
+  assert.match(points, /score-yellow">3/);
+  assert.match(points, /score-red">2/);
+  assert.match(points, /score-dash/g);
+  assert.equal((points.match(/score-dash/g) || []).length, 2);
+  assert.match(points, /score-yellow">60/);
   assert.match(html, /target="_blank"/);
   assert.match(html, /https:\/\/example.com\/contacts\/1/);
 });
@@ -90,6 +124,7 @@ test('call table uses stage titles and does not add weight or instruction column
     order: 'desc',
   });
   assert.match(html, /Приветствие/);
+  assert.match(html, /colspan="7"/);
   assert.doesNotMatch(html, /Формулировка/);
   assert.doesNotMatch(html, /<th>[^<]*Вес/);
 });

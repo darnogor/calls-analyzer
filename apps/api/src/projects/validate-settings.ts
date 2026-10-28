@@ -1,21 +1,21 @@
-import { STAGE_KEYS, type Stage } from './scorecard';
+import type { Stage } from './scorecard';
 
 export type SettingsBody = {
   timezone: string;
   min_call_duration_sec: number;
+  card_key: string | null;
   stages: Stage[];
 };
 
 export type SettingsParse =
   | { ok: true; value: SettingsBody }
-  | { ok: false; error: 'stage_set_is_fixed' }
   | { ok: false; error: 'invalid_settings'; details: string[] };
-
-const WEIGHT_EPSILON = 1e-6;
 
 export type TimeZoneDirectory = {
   query(text: string, params?: unknown[]): Promise<{ rows: Array<{ name: string }> }>;
 };
+
+const KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 export async function pgTimeZoneName(timeZones: TimeZoneDirectory, timezone: string): Promise<string | null> {
   const result = await timeZones.query(
@@ -34,9 +34,6 @@ export async function parseSettings(body: unknown, timeZones: TimeZoneDirectory)
   if (!isRecord(body)) {
     return { ok: false, error: 'invalid_settings', details: ['timezone', 'min_call_duration_sec', 'stages'] };
   }
-  if (!isFixedStageSet(body.stages)) {
-    return { ok: false, error: 'stage_set_is_fixed' };
-  }
   const details: string[] = [];
   const requested = typeof body.timezone === 'string' ? body.timezone.trim() : '';
   const timezone = requested ? await pgTimeZoneName(timeZones, requested) : null;
@@ -46,70 +43,93 @@ export async function parseSettings(body: unknown, timeZones: TimeZoneDirectory)
   if (!isPositiveInt(body.min_call_duration_sec)) {
     details.push('min_call_duration_sec');
   }
-  const byKey = new Map<string, Record<string, unknown>>();
-  for (const stage of body.stages as unknown[]) {
-    const record = stage as Record<string, unknown>;
-    byKey.set(String(record.key), record);
-  }
-  const stages: Stage[] = [];
-  let weightsOk = true;
-  for (const key of STAGE_KEYS) {
-    const record = byKey.get(key)!;
-    const title = typeof record.title === 'string' ? record.title.trim() : '';
-    if (!title) {
-      details.push('stage_title');
-    }
-    if (typeof record.weight !== 'number' || !Number.isFinite(record.weight) || record.weight < -WEIGHT_EPSILON || record.weight > 1 + WEIGHT_EPSILON) {
-      weightsOk = false;
-      details.push('stage_weight');
-    }
-    if (typeof record.instruction !== 'string') {
-      details.push('stage_instruction');
-    }
-    stages.push({
-      key,
-      title,
-      weight: typeof record.weight === 'number' ? record.weight : 0,
-      instruction: typeof record.instruction === 'string' ? record.instruction : '',
-    });
-  }
-  if (weightsOk && !weightsSumToOne(stages.map((stage) => stage.weight))) {
-    details.push('weights_sum_must_be_1');
-  }
+  const stages = parseStages(body.stages, details);
+  const cardKey = readCardKey(body.card_key, details);
   const unique = [...new Set(details)];
-  if (unique.length > 0) {
-    return { ok: false, error: 'invalid_settings', details: unique };
+  if (unique.length > 0 || !stages || cardKey === undefined) {
+    return { ok: false, error: 'invalid_settings', details: unique.length > 0 ? unique : ['stages'] };
   }
   return {
     ok: true,
     value: {
       timezone: timezone ?? '',
       min_call_duration_sec: body.min_call_duration_sec as number,
+      card_key: cardKey,
       stages,
     },
   };
 }
 
-function isFixedStageSet(value: unknown): boolean {
-  if (!Array.isArray(value) || value.length !== STAGE_KEYS.length) {
-    return false;
+function readCardKey(value: unknown, details: string[]): string | null | undefined {
+  if (value === undefined || value === null) {
+    return null;
   }
-  const keys: string[] = [];
-  for (const stage of value) {
-    if (!isRecord(stage) || typeof stage.key !== 'string') {
-      return false;
-    }
-    keys.push(stage.key);
+  if (typeof value !== 'string') {
+    details.push('card_key');
+    return undefined;
   }
-  if (new Set(keys).size !== STAGE_KEYS.length) {
-    return false;
+  const trimmed = value.trim();
+  if (trimmed.length > 128) {
+    details.push('card_key');
+    return undefined;
   }
-  return STAGE_KEYS.every((key) => keys.includes(key));
+  return trimmed === '' ? null : trimmed;
 }
 
-function weightsSumToOne(weights: number[]): boolean {
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  return Math.abs(total - 1) <= WEIGHT_EPSILON;
+export function parseTextSetting(body: unknown): string | null {
+  if (!isRecord(body) || typeof body.body !== 'string') {
+    return null;
+  }
+  return body.body;
+}
+
+function parseStages(value: unknown, details: string[]): Stage[] | null {
+  if (!Array.isArray(value) || value.length === 0) {
+    details.push('stages');
+    return null;
+  }
+  const stages: Stage[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item)) {
+      details.push('stages');
+      return null;
+    }
+    const key = typeof item.key === 'string' ? item.key.trim() : '';
+    if (!KEY_PATTERN.test(key) || seen.has(key)) {
+      details.push('stage_key');
+    } else {
+      seen.add(key);
+    }
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    if (!title) {
+      details.push('stage_title');
+    }
+    if (typeof item.weight !== 'number' || !Number.isFinite(item.weight) || item.weight <= 0) {
+      details.push('stage_weight');
+    }
+    if (typeof item.high_score !== 'string') {
+      details.push('stage_high_score');
+    }
+    if (typeof item.defect_example !== 'string') {
+      details.push('stage_defect_example');
+    }
+    if (typeof item.sample_line !== 'string') {
+      details.push('stage_sample_line');
+    }
+    stages.push({
+      key,
+      title,
+      weight: typeof item.weight === 'number' ? item.weight : 0,
+      high_score: typeof item.high_score === 'string' ? item.high_score : '',
+      defect_example: typeof item.defect_example === 'string' ? item.defect_example : '',
+      sample_line: typeof item.sample_line === 'string' ? item.sample_line : '',
+    });
+  }
+  if (details.length > 0) {
+    return null;
+  }
+  return stages;
 }
 
 function isPositiveInt(value: unknown): value is number {

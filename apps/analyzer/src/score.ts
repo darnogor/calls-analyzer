@@ -2,89 +2,283 @@ export type StageInput = {
   key: string;
   title: string;
   weight: number;
-  instruction: string;
+  high_score: string;
+  defect_example: string;
+  sample_line: string;
 };
 
-export type StageScore = StageInput & {
-  score: number;
-  comment: string;
+export type StageStatus = 'scored' | 'not_applicable' | 'unobservable';
+
+export type StageResult = StageInput & {
+  status: StageStatus;
+  score: number | null;
+  reason: string;
+  evidence_ids: string[];
 };
 
-export function overallScore(stages: Array<{ score: number; weight: number }>): number {
-  const total = stages.reduce((sum, stage) => sum + stage.score * stage.weight, 0);
-  return Math.round(total);
+export type ViolationFlag = {
+  code: string;
+  evidence_ids: string[];
+};
+
+export type PaymentAgreement = {
+  agreed: boolean | null;
+  summary: string | null;
+  evidence_ids: string[];
+};
+
+export type ModelScore = {
+  stages: StageResult[];
+  flags: ViolationFlag[];
+  payment_agreement: PaymentAgreement;
+  summary: string | null;
+};
+
+const STATUSES = new Set<StageStatus>(['scored', 'not_applicable', 'unobservable']);
+
+export function qualityScore(stages: Array<{ status: string; score: number | null; weight: number }>): number | null {
+  let weighted = 0;
+  let weights = 0;
+  for (const stage of stages) {
+    if (stage.status !== 'scored' || typeof stage.score !== 'number') {
+      continue;
+    }
+    weighted += stage.weight * stage.score;
+    weights += stage.weight;
+  }
+  if (weights === 0) {
+    return null;
+  }
+  return Math.round((100 * weighted) / (4 * weights));
+}
+
+export function coverageRatio(stages: Array<{ status: string; weight: number }>): number | null {
+  let scored = 0;
+  let unobservable = 0;
+  for (const stage of stages) {
+    if (stage.status === 'scored') {
+      scored += stage.weight;
+    } else if (stage.status === 'unobservable') {
+      unobservable += stage.weight;
+    }
+  }
+  const denominator = scored + unobservable;
+  if (denominator === 0) {
+    return null;
+  }
+  return Math.round((scored / denominator) * 1_000_000) / 1_000_000;
+}
+
+export function isPreliminary(stages: Array<{ status: string }>): boolean {
+  return stages.some((stage) => stage.status === 'unobservable');
 }
 
 export function parseModelJson(
   content: string,
   stages: StageInput[],
-): { ok: true; stages: StageScore[]; summary: string } | { ok: false } {
+  transcriptIds: ReadonlySet<string>,
+): { ok: true; value: ModelScore } | { ok: false } {
   let value: unknown;
   try {
     value = JSON.parse(content);
   } catch {
     return { ok: false };
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return { ok: false };
   }
-  const record = value as { stages?: unknown; summary?: unknown };
-  if (typeof record.summary !== 'string' || record.summary.trim() === '') {
+  const parsedStages = parseStages(value.stages, stages, transcriptIds);
+  if (!parsedStages) {
     return { ok: false };
   }
-  if (!record.stages || typeof record.stages !== 'object' || Array.isArray(record.stages)) {
+  const flags = parseFlags(value.flags, transcriptIds);
+  if (!flags) {
     return { ok: false };
   }
-  const stageRecord = record.stages as Record<string, unknown>;
-  const expected = stages.map((stage) => stage.key);
-  const actual = Object.keys(stageRecord);
-  if (actual.length !== expected.length || expected.some((key) => !Object.prototype.hasOwnProperty.call(stageRecord, key))) {
+  const payment = parsePayment(value.payment_agreement, transcriptIds);
+  if (!payment) {
     return { ok: false };
   }
-  const scored: StageScore[] = [];
-  for (const stage of stages) {
-    const item = stageRecord[stage.key];
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      return { ok: false };
-    }
-    const score = (item as { score?: unknown }).score;
-    const comment = (item as { comment?: unknown }).comment;
-    if (typeof score !== 'number' || !Number.isInteger(score) || score < 0 || score > 100) {
-      return { ok: false };
-    }
-    if (typeof comment !== 'string' || comment.trim() === '') {
-      return { ok: false };
-    }
-    scored.push({
-      key: stage.key,
-      title: stage.title,
-      weight: stage.weight,
-      instruction: stage.instruction,
-      score,
-      comment: comment.trim(),
-    });
+  return {
+    ok: true,
+    value: { stages: parsedStages, flags, payment_agreement: payment, summary: readSummary(value.summary) },
+  };
+}
+
+function readSummary(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
   }
-  return { ok: true, stages: scored, summary: record.summary.trim() };
+  return value.trim() || null;
 }
 
 export function readStages(value: unknown): StageInput[] | null {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.length === 0) {
     return null;
   }
   const stages: StageInput[] = [];
+  const seen = new Set<string>();
   for (const item of value) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    if (!isRecord(item)) {
       return null;
     }
-    const record = item as { key?: unknown; title?: unknown; weight?: unknown; instruction?: unknown };
-    const key = typeof record.key === 'string' ? record.key.trim() : '';
-    const title = typeof record.title === 'string' ? record.title : '';
-    const instruction = typeof record.instruction === 'string' ? record.instruction : '';
-    const weight = typeof record.weight === 'number' ? record.weight : Number(record.weight);
+    const key = typeof item.key === 'string' ? item.key.trim() : '';
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    const weight = typeof item.weight === 'number' ? item.weight : Number(item.weight);
     if (!key || !title || !Number.isFinite(weight)) {
       return null;
     }
-    stages.push({ key, title, weight, instruction });
+    if (seen.has(key)) {
+      return null;
+    }
+    seen.add(key);
+    const high = text(item.high_score);
+    const legacy = text(item.instruction);
+    stages.push({
+      key,
+      title,
+      weight,
+      high_score: high || legacy,
+      defect_example: text(item.defect_example),
+      sample_line: text(item.sample_line),
+    });
   }
   return stages;
+}
+
+function parseStages(
+  value: unknown,
+  expected: StageInput[],
+  transcriptIds: ReadonlySet<string>,
+): StageResult[] | null {
+  if (!Array.isArray(value) || value.length !== expected.length) {
+    return null;
+  }
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const item of value) {
+    if (!isRecord(item)) {
+      return null;
+    }
+    const key = typeof item.key === 'string' ? item.key : typeof item.id === 'string' ? item.id : '';
+    if (!key || byKey.has(key)) {
+      return null;
+    }
+    byKey.set(key, item);
+  }
+  const scored: StageResult[] = [];
+  for (const stage of expected) {
+    const item = byKey.get(stage.key);
+    if (!item) {
+      return null;
+    }
+    const status = item.status;
+    if (typeof status !== 'string' || !STATUSES.has(status as StageStatus)) {
+      return null;
+    }
+    const stageStatus = status as StageStatus;
+    const score = readScore(item.score, stageStatus);
+    if (score === undefined) {
+      return null;
+    }
+    const reason = typeof item.reason === 'string' ? item.reason.trim() : '';
+    if (!reason) {
+      return null;
+    }
+    const evidence = readEvidence(item.evidence_ids, transcriptIds, false);
+    if (!evidence) {
+      return null;
+    }
+    scored.push({
+      ...stage,
+      status: stageStatus,
+      score,
+      reason,
+      evidence_ids: evidence,
+    });
+  }
+  return scored;
+}
+
+function readScore(value: unknown, status: StageStatus): number | null | undefined {
+  if (status === 'scored') {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 4) {
+      return undefined;
+    }
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return undefined;
+}
+
+function parseFlags(value: unknown, transcriptIds: ReadonlySet<string>): ViolationFlag[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const flags: ViolationFlag[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) {
+      return null;
+    }
+    const code = typeof item.code === 'string' ? item.code.trim() : '';
+    if (!code || code.length > 80) {
+      return null;
+    }
+    const evidence = readEvidence(item.evidence_ids, transcriptIds, true);
+    if (!evidence) {
+      return null;
+    }
+    flags.push({ code, evidence_ids: evidence });
+  }
+  return flags;
+}
+
+function parsePayment(value: unknown, transcriptIds: ReadonlySet<string>): PaymentAgreement | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const agreed = value.agreed;
+  if (agreed !== true && agreed !== false && agreed !== null) {
+    return null;
+  }
+  let summary: string | null = null;
+  if (value.summary !== null && value.summary !== undefined) {
+    if (typeof value.summary !== 'string') {
+      return null;
+    }
+    summary = value.summary.trim() || null;
+  }
+  const evidence = readEvidence(value.evidence_ids, transcriptIds, agreed === true);
+  if (!evidence) {
+    return null;
+  }
+  return { agreed, summary, evidence_ids: evidence };
+}
+
+function readEvidence(value: unknown, transcriptIds: ReadonlySet<string>, required: boolean): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '' || !transcriptIds.has(item)) {
+      return null;
+    }
+    if (!ids.includes(item)) {
+      ids.push(item);
+    }
+  }
+  if (required && ids.length === 0) {
+    return null;
+  }
+  return ids;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

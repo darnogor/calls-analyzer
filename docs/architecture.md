@@ -172,8 +172,10 @@ flowchart LR
 | Данные | Пишет | Читают |
 | --- | --- | --- |
 | `accounts`, `project_memberships` | `api` | `api` |
-| `project_inputs` | `api` | `analyzer` читает только скрипты |
-| `scorecards` | `api` | `analyzer` читает только промпт |
+| `project_inputs` | `api` | `api`; в запрос модели не копируются |
+| `scorecards` | `api` | `analyzer` читает текущую карточку этапов |
+| `scoring_prompts`, `product_facts` | `api` | `analyzer` читает текущие тексты |
+| `deal_stages` | `api` | `api`, для фильтра стадий |
 | `projects` | `api` | `api`; `media` читает только порог длительности |
 | `sources` | `api` | `api` |
 | `managers`, `contacts` | `api` | `api` |
@@ -184,7 +186,7 @@ flowchart LR
 | снимок этапов, комментарии, итог | `analyzer` | `api` |
 | объекты аудио | `api` для прямой загрузки, `media` для скачивания по URL | `transcriber`, `api` |
 
-`analyzer` для оценки читает транскрипт, промпт и скрипты. Менеджеров, контакты и карточку звонка он не читает. `transcriber` читает файл записи и направление звонка, карточку оценки не читает.
+`analyzer` для оценки читает транскрипт, карточку этапов, промпт, факты продукта и имя менеджера с именем клиента этого звонка. Сценарий из `project_inputs` он не читает. `transcriber` читает файл записи и направление звонка, карточку оценки не читает. Каждой реплике он ставит стабильный `id`.
 
 Ключ объекта: `projects/{project_id}/calls/{call_id}.{ext}`.
 

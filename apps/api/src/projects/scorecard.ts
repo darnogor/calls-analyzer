@@ -1,12 +1,12 @@
 import type { PrismaClient } from '@calls/db';
 
-export const STAGE_KEYS = ['opening', 'needs', 'presentation', 'objections', 'closing'] as const;
-
 export type Stage = {
   key: string;
   title: string;
   weight: number;
-  instruction: string;
+  high_score: string;
+  defect_example: string;
+  sample_line: string;
 };
 
 export async function loadCurrentStages(db: PrismaClient, projectId: string): Promise<Stage[]> {
@@ -23,21 +23,31 @@ export function readStages(value: unknown): Stage[] {
     return [];
   }
   const stages: Stage[] = [];
+  const seen = new Set<string>();
   for (const item of value) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       continue;
     }
     const record = item as Record<string, unknown>;
-    if (typeof record.key !== 'string' || record.key === '') {
+    if (typeof record.key !== 'string' || record.key === '' || seen.has(record.key)) {
       continue;
     }
+    seen.add(record.key);
     const title = typeof record.title === 'string' ? record.title.trim() : '';
+    const high = text(record.high_score);
+    const legacy = text(record.instruction);
     stages.push({
       key: record.key,
       title: title || record.key,
       weight: typeof record.weight === 'number' && Number.isFinite(record.weight) ? record.weight : 0,
-      instruction: typeof record.instruction === 'string' ? record.instruction : '',
+      high_score: high || legacy,
+      defect_example: text(record.defect_example),
+      sample_line: text(record.sample_line),
     });
   }
   return stages;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }

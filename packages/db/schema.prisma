@@ -38,13 +38,16 @@ model Project {
   min_call_duration_sec  Int      @default(180) @db.Integer
   created_at             DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
 
-  memberships ProjectMembership[]
-  scorecards  Scorecard[]
-  inputs      ProjectInput[]
-  sources     Source[]
-  managers    Manager[]
-  contacts    Contact[]
-  calls       Call[]
+  memberships     ProjectMembership[]
+  scorecards      Scorecard[]
+  scoring_prompts ScoringPrompt[]
+  product_facts   ProductFact[]
+  deal_stages     DealStage[]
+  inputs          ProjectInput[]
+  sources         Source[]
+  managers        Manager[]
+  contacts        Contact[]
+  calls           Call[]
 
   @@map("projects")
 }
@@ -66,14 +69,52 @@ model ProjectMembership {
 
 /// constraint scorecards_version_positive check (version >= 1)
 model Scorecard {
-  project_id  String @db.Uuid
-  version     Int    @db.Integer
-  stages_json Json   @db.JsonB
+  project_id  String  @db.Uuid
+  version     Int     @db.Integer
+  stages_json Json    @db.JsonB
+  card_key    String? @db.Text
 
   project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scorecards_project_id_fkey")
 
   @@id([project_id, version], map: "scorecards_pkey")
   @@map("scorecards")
+}
+
+/// constraint scoring_prompts_version_positive check (version >= 1)
+model ScoringPrompt {
+  project_id String @db.Uuid
+  version    Int    @db.Integer
+  body       String @db.Text
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scoring_prompts_project_id_fkey")
+
+  @@id([project_id, version], map: "scoring_prompts_pkey")
+  @@map("scoring_prompts")
+}
+
+/// constraint product_facts_version_positive check (version >= 1)
+model ProductFact {
+  project_id String @db.Uuid
+  version    Int    @db.Integer
+  body       String @db.Text
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "product_facts_project_id_fkey")
+
+  @@id([project_id, version], map: "product_facts_pkey")
+  @@map("product_facts")
+}
+
+/// constraint deal_stages_position_positive check (position >= 1)
+model DealStage {
+  id         String @id(map: "deal_stages_pkey") @db.Uuid
+  project_id String @db.Uuid
+  position   Int    @db.Integer
+  name       String @db.Text
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "deal_stages_project_id_fkey")
+
+  @@unique([project_id, name], map: "deal_stages_project_name_key")
+  @@map("deal_stages")
 }
 
 model ProjectInput {
@@ -204,6 +245,7 @@ model CallAnalysis {
   stages_json     Json?    @db.JsonB
   overall_score   Int?     @db.Integer
   summary         String?  @db.Text
+  extras_json     Json?    @db.JsonB
   ai_model        String?  @db.Text
   created_at      DateTime @default(dbgenerated("now()")) @db.Timestamptz(6)
 
