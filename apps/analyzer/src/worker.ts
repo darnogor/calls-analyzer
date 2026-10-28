@@ -162,10 +162,11 @@ export class AnalyzeWorker implements OnModuleInit, OnModuleDestroy {
     const updated = await this.db.client.$executeRawUnsafe(
       `insert into call_analysis (
          id, call_id, inputs_json, stages_json, summary, overall_score, extras_json, ai_model, created_at
-       ) values ($1, $2, $3::jsonb, $4::jsonb, null, $5, $6::jsonb, $7, now())
+       ) values ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7::jsonb, $8, now())
        on conflict (call_id) do update set
          inputs_json = excluded.inputs_json,
          stages_json = excluded.stages_json,
+         summary = excluded.summary,
          overall_score = excluded.overall_score,
          extras_json = excluded.extras_json,
          ai_model = excluded.ai_model,
@@ -175,6 +176,7 @@ export class AnalyzeWorker implements OnModuleInit, OnModuleDestroy {
       callId,
       JSON.stringify(score.inputs),
       JSON.stringify(score.stages),
+      score.summary,
       score.overall,
       JSON.stringify(score.extras),
       score.model,

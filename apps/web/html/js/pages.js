@@ -1,6 +1,5 @@
 import { ApiError, api } from './api.js';
 import {
-  DEFAULT_STAGE_TITLES,
   callsApiSearch,
   callsPageSearch,
   dealAtCallStage,
@@ -24,6 +23,7 @@ import {
   readManagersQuery,
   routeAllowed,
   stageColumns,
+  stageTitle,
   toggleSort,
   translateCallError,
   translateRequestError,
@@ -355,7 +355,7 @@ async function renderCallList(ctx, mode) {
     ? notice('Ключ и значение произвольного поля нужно указать вместе.')
     : '';
   const filterNote = filters.missing
-    ? notice('Справочник менеджеров и стадий сделки сейчас недоступен. Колонки этапов подписаны шаблоном проекта.')
+    ? notice('Справочник менеджеров и стадий сделки сейчас недоступен.')
     : '';
   const html = `${fieldNote}${filterNote}${filtersHtml({
     query,
@@ -460,7 +460,7 @@ async function renderCall(ctx) {
             .map((stage) => {
               const meaning = stage.high_score || stage.instruction || '';
               return `<tr>
-                <td><div class="stage-title">${esc(stage.title || DEFAULT_STAGE_TITLES[stage.key] || stage.key || '')}${
+                <td><div class="stage-title">${esc(stageTitle(stage))}${
                   stage.weight !== null && stage.weight !== undefined ? `<span class="weight">вес ${esc(formatWeight(stage.weight))}</span>` : ''
                 }</div>${meaning ? `<p class="instruction">${esc(meaning)}</p>` : ''}${
                   stage.defect_example ? `<p class="instruction">Пример недочёта: ${esc(stage.defect_example)}</p>` : ''
@@ -690,7 +690,7 @@ async function renderManagers(ctx) {
           ${stages.map((stage) => sortButton(stage.title, `stage.${stage.key}`, query)).join('')}
           ${sortButton('Средний итог', 'overall', query)}
         </tr></thead>
-        <tbody>${rows || '<tr><td class="empty-cell" colspan="12">Нет менеджеров</td></tr>'}</tbody>
+        <tbody>${rows || `<tr><td class="empty-cell" colspan="${4 + stages.length}">Нет менеджеров</td></tr>`}</tbody>
       </table></div>
       <p class="pager" data-count>${managerCount(shown.length, items.length)}</p>`,
     bind(root) {
@@ -754,7 +754,7 @@ async function renderManager(ctx) {
   }
   if (!ctx.isCurrent()) return { skip: true };
   const stages = Array.isArray(manager.stages) && manager.stages.length
-    ? manager.stages.map((stage) => ({ key: stage.key, title: stage.title || DEFAULT_STAGE_TITLES[stage.key] || stage.key }))
+    ? manager.stages.map((stage) => ({ key: stage.key, title: stageTitle(stage) }))
     : stageColumns(filters.data?.stages);
   const stats = `<div class="stats">
     ${stat('Звонков', esc(manager.calls_count ?? 0), true)}
@@ -850,7 +850,8 @@ async function renderSettings(ctx) {
     html: `${panel(
       'Карточка этапов',
       `<form class="stack" data-settings>
-        ${cardKey ? `<p class="muted">Ключ карточки: ${esc(cardKey)}</p>` : ''}
+        <label>Ключ карточки <input name="card_key" value="${esc(cardKey)}" placeholder="можно оставить пустым"></label>
+        <p class="muted">Пустое поле стирает ключ. Новая версия не копирует его сама.</p>
         <label>Часовой пояс <input name="timezone" value="${esc(body?.timezone || ctx.timeZone)}" required></label>
         <label>Порог длительности, секунды <input name="min_call_duration_sec" type="number" min="1" step="1" value="${esc(body?.min_call_duration_sec ?? '')}" required></label>
         <div data-stage-list>${rows}</div>
@@ -952,6 +953,7 @@ function bindScorecard(root, projectId) {
         body: {
           timezone: String(new FormData(form).get('timezone') || '').trim(),
           min_call_duration_sec: duration,
+          card_key: String(new FormData(form).get('card_key') || '').trim(),
           stages,
         },
       });
@@ -1188,7 +1190,7 @@ function managerStageColumns(items) {
   if (!sample) return [];
   return sample.stages.map((stage) => ({
     key: stage.key,
-    title: stage.title || DEFAULT_STAGE_TITLES[stage.key] || stage.key,
+    title: stageTitle(stage),
   }));
 }
 

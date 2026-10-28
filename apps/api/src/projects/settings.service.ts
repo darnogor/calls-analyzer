@@ -70,8 +70,8 @@ export class SettingsService {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         await this.db.client.$transaction(async (tx) => {
-          const current = await tx.$queryRawUnsafe<Array<{ version: number; card_key: string | null }>>(
-            `select version, card_key
+          const current = await tx.$queryRawUnsafe<Array<{ version: number }>>(
+            `select version
              from scorecards
              where project_id = $1
              order by version desc
@@ -91,7 +91,7 @@ export class SettingsService {
             data: {
               project_id: project.id,
               version: version + 1,
-              card_key: current[0]?.card_key ?? null,
+              card_key: saved.card_key,
               stages_json: saved.stages as unknown as Prisma.InputJsonValue,
             },
           });

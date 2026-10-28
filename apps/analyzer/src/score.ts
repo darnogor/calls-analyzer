@@ -31,6 +31,7 @@ export type ModelScore = {
   stages: StageResult[];
   flags: ViolationFlag[];
   payment_agreement: PaymentAgreement;
+  summary: string | null;
 };
 
 const STATUSES = new Set<StageStatus>(['scored', 'not_applicable', 'unobservable']);
@@ -98,7 +99,17 @@ export function parseModelJson(
   if (!payment) {
     return { ok: false };
   }
-  return { ok: true, value: { stages: parsedStages, flags, payment_agreement: payment } };
+  return {
+    ok: true,
+    value: { stages: parsedStages, flags, payment_agreement: payment, summary: readSummary(value.summary) },
+  };
+}
+
+function readSummary(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  return value.trim() || null;
 }
 
 export function readStages(value: unknown): StageInput[] | null {

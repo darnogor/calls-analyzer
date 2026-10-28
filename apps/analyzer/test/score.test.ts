@@ -76,6 +76,11 @@ describe('model json', () => {
     assert.equal(parsed.value.stages[0]?.score, 4);
     assert.equal(parsed.value.stages[1]?.score, null);
     assert.equal(parsed.value.stages[0]?.high_score, 'роль ясна');
+    assert.equal(parsed.value.summary, null);
+    const withSummary = parseModelJson(model({ summary: ' Клиент думает ' }), stages, ids);
+    assert.equal(withSummary.ok, true);
+    if (!withSummary.ok) return;
+    assert.equal(withSummary.value.summary, 'Клиент думает');
     const withFlag = parseModelJson(
       model({ flags: [{ code: 'false_role', evidence_ids: ['t2'] }] }),
       stages,

@@ -186,7 +186,7 @@ test('stage columns use filter titles and leave weight and instruction off the c
     ]),
     [
       { key: 'opening', title: 'Приветствие' },
-      { key: 'needs', title: 'Потребность' },
+      { key: 'needs', title: 'needs' },
     ],
   );
 });

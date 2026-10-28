@@ -37,6 +37,7 @@ function modelJson(overall = 15): string {
     ],
     flags: [{ code: 'false_role', evidence_ids: ['t1'] }],
     payment_agreement: { agreed: null, summary: null, evidence_ids: [] },
+    summary: 'Клиент думает',
     quality_score: overall,
   });
 }
@@ -118,10 +119,12 @@ describe('analyzer pipeline', () => {
     assert.equal(payload.phone, undefined);
     const score = fake.saved[0] as {
       overall: number;
+      summary: string | null;
       extras: { flags: unknown[]; payment_agreement: { agreed: boolean | null } };
       inputs: { scoring_prompt: string };
     };
     assert.equal(score.overall, 67);
+    assert.equal(score.summary, 'Клиент думает');
     assert.equal(score.extras.flags.length, 1);
     assert.equal(score.extras.payment_agreement.agreed, null);
     assert.equal(score.inputs.scoring_prompt, prompt);

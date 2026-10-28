@@ -3,6 +3,7 @@ import type { Stage } from './scorecard';
 export type SettingsBody = {
   timezone: string;
   min_call_duration_sec: number;
+  card_key: string | null;
   stages: Stage[];
 };
 
@@ -43,8 +44,9 @@ export async function parseSettings(body: unknown, timeZones: TimeZoneDirectory)
     details.push('min_call_duration_sec');
   }
   const stages = parseStages(body.stages, details);
+  const cardKey = readCardKey(body.card_key, details);
   const unique = [...new Set(details)];
-  if (unique.length > 0 || !stages) {
+  if (unique.length > 0 || !stages || cardKey === undefined) {
     return { ok: false, error: 'invalid_settings', details: unique.length > 0 ? unique : ['stages'] };
   }
   return {
@@ -52,9 +54,26 @@ export async function parseSettings(body: unknown, timeZones: TimeZoneDirectory)
     value: {
       timezone: timezone ?? '',
       min_call_duration_sec: body.min_call_duration_sec as number,
+      card_key: cardKey,
       stages,
     },
   };
+}
+
+function readCardKey(value: unknown, details: string[]): string | null | undefined {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    details.push('card_key');
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > 128) {
+    details.push('card_key');
+    return undefined;
+  }
+  return trimmed === '' ? null : trimmed;
 }
 
 export function parseTextSetting(body: unknown): string | null {

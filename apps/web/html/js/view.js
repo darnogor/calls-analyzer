@@ -131,9 +131,10 @@ export function callsTable({
   const rows = items.length
     ? items.map((call) => callRow(call, { stages, timeZone, projectId, showManager, showScores, showStatus, showError })).join('')
     : '';
+  const columns = 4 + (showManager ? 1 : 0) + (showScores ? stages.length + 1 : 0) + (showStatus ? 1 : 0) + (showError ? 1 : 0);
   return `<div class="table-wrap"><table class="grid">
     <thead><tr>${headers}</tr></thead>
-    <tbody>${rows || `<tr><td class="empty-cell" colspan="12">Нет звонков</td></tr>`}</tbody>
+    <tbody>${rows || `<tr><td class="empty-cell" colspan="${columns}">Нет звонков</td></tr>`}</tbody>
   </table></div>`;
 }
 

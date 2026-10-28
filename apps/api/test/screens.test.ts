@@ -78,6 +78,26 @@ describe('analysis settings', () => {
       ],
     }, pgTimeZones());
     assert.equal(custom.ok, true);
+    if (!custom.ok) return;
+    assert.equal(custom.value.card_key, null);
+    const labeled = await parseSettings({
+      timezone: 'Europe/Moscow',
+      min_call_duration_sec: 180,
+      card_key: '  other_card  ',
+      stages: STAGES,
+    }, pgTimeZones());
+    assert.equal(labeled.ok, true);
+    if (!labeled.ok) return;
+    assert.equal(labeled.value.card_key, 'other_card');
+    const cleared = await parseSettings({
+      timezone: 'Europe/Moscow',
+      min_call_duration_sec: 180,
+      card_key: '   ',
+      stages: STAGES,
+    }, pgTimeZones());
+    assert.equal(cleared.ok, true);
+    if (!cleared.ok) return;
+    assert.equal(cleared.value.card_key, null);
     const empty = await parseSettings({
       timezone: 'Europe/Moscow',
       min_call_duration_sec: 180,

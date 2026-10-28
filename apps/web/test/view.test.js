@@ -124,6 +124,7 @@ test('call table uses stage titles and does not add weight or instruction column
     order: 'desc',
   });
   assert.match(html, /Приветствие/);
+  assert.match(html, /colspan="7"/);
   assert.doesNotMatch(html, /Формулировка/);
   assert.doesNotMatch(html, /<th>[^<]*Вес/);
 });

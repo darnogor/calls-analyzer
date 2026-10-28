@@ -1,14 +1,6 @@
 export const EMPTY_DEAL_STAGE = 'Все стадии';
 export const ALL_MANAGERS = 'Все менеджеры';
 
-export const DEFAULT_STAGE_TITLES = {
-  opening: 'Открытие',
-  needs: 'Потребность',
-  presentation: 'Презентация',
-  objections: 'Возражения',
-  closing: 'Закрытие',
-};
-
 const CALL_ERRORS = {
   empty_transcript: 'Пустой ответ распознавания',
   transcript_missing: 'Нет транскрипта',
@@ -63,11 +55,7 @@ export function formatScore(score) {
 export function formatWeight(weight) {
   const value = Number(weight);
   if (!Number.isFinite(value)) return '';
-  if (value > 0 && value <= 1) {
-    const percent = Math.round(value * 1000) / 10;
-    return `${Number.isInteger(percent) ? percent : percent}%`;
-  }
-  return Number.isInteger(value) ? String(value) : String(Math.round(value * 100) / 100);
+  return Number.isInteger(value) ? String(value) : String(Math.round(value * 1000) / 1000);
 }
 
 export function percentSumIs100(percents) {
@@ -357,16 +345,20 @@ export function toggleSort(currentSort, currentOrder, nextSort) {
   return { sort: nextSort, order: ascFirst ? 'asc' : 'desc' };
 }
 
+export function stageTitle(stage) {
+  const title = stage && typeof stage.title === 'string' ? stage.title.trim() : '';
+  if (title) return title;
+  const key = stage && typeof stage.key === 'string' ? stage.key.trim() : '';
+  return key;
+}
+
 export function stageColumns(filterStages) {
   if (!Array.isArray(filterStages)) return [];
   return filterStages
     .filter((stage) => stage && typeof stage.key === 'string' && stage.key)
     .map((stage) => ({
       key: stage.key,
-      title:
-        typeof stage.title === 'string' && stage.title.trim()
-          ? stage.title.trim()
-          : DEFAULT_STAGE_TITLES[stage.key] || stage.key,
+      title: stageTitle(stage),
     }));
 }
 

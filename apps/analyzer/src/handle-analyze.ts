@@ -42,6 +42,7 @@ export type ScoreWrite = {
     client: { name: string; company: string | null } | null;
   };
   stages: StageResult[];
+  summary: string | null;
   overall: number | null;
   extras: {
     coverage: number | null;
@@ -151,6 +152,7 @@ export async function handleAnalyze(message: AnalyzeMessage, deps: AnalyzeDeps):
         client: parties.client,
       },
       stages: parsed.value.stages,
+      summary: parsed.value.summary,
       overall,
       extras: {
         coverage: coverageRatio(parsed.value.stages),
